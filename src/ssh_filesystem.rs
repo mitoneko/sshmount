@@ -119,12 +119,32 @@ impl Filesystem for Sshfs {
         };
         debug!("[readdir] inode={}, paht={:?}, offset={}",ino, &path, offset);
         match self.sftp.readdir(&path) {
-            Ok(dir) => {
+            Ok(mut dir) => {
+                debug!("[readdir] 追加作業開始。dir_cnt={}", dir.len());
+                let cur_file_attr = ssh2::FileStat { 
+                    size: None, 
+                    uid: None, 
+                    gid: None, 
+                    perm: Some(libc::S_IFDIR), 
+                    atime: None, 
+                    mtime: None
+                }; // "." ".."の解決用attr ディレクトリであることのみを示す。
+                dir.insert(0, (Path::new("..").into(), cur_file_attr.clone()));
+                dir.insert(0, (Path::new(".").into(), cur_file_attr));
+                debug!("[readdir] 追加作業終了。 dir_cnt={}", dir.len());
                 let mut i = offset+1;
                 for f in dir.iter().skip(offset as usize) {
-                    let ino = self.inodes.add(&f.0);
-                    let name = f.0.file_name().unwrap(); 
-                    let filetype = match Self::conv_file_kind_ssh2fuser(&f.1.file_type()) {
+                    let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
+                        1
+                    } else {
+                        self.inodes.add(&f.0)
+                    };
+                    let name = match f.0.file_name() {
+                        Some(n) => n,
+                        None => f.0.as_os_str(),
+                    };
+                    let filetype = &f.1.file_type();
+                    let filetype = match Self::conv_file_kind_ssh2fuser(filetype) {
                         Ok(t) => t,
                         Err(e) => {
                             debug!("[readdir]ファイルタイプ解析失敗: inode={}, name={:?}", ino, name);
@@ -132,6 +152,7 @@ impl Filesystem for Sshfs {
                             return;
                         }
                     };
+                    debug!("返信値追加　ino={}, offset={}, kind={:?}, name={:?}", ino, i, &filetype, &name);
                     if reply.add(ino, i, filetype, name) {break;}
                     i += 1;
                 }
