@@ -1,10 +1,33 @@
+mod ssh_filesystem;
+
 use clap::Parser;
+use dns_lookup::lookup_host;
+use log::debug;
+use ssh2::Session;
+use std::net::TcpStream;
 
 fn main() {
     let opt = Opt::parse();
+    env_logger::init();
+    let options = vec![fuser::MountOption::FSName("sshfs".to_string())];
 
     println!("\"{}\"をマウントする予定", opt.remote);
-    println!("\"{}\"にマウントされる予定", opt.mount_point);
+    // 今は、固定接続先に、固定接続
+    let address = lookup_host("reterminal.local").unwrap();
+    if address.is_empty() {
+        panic!("not found");
+    }
+    let socketaddr = std::net::SocketAddr::from((address[0], 22));
+    debug!("接続先: {:?}", socketaddr);
+    let tcp = TcpStream::connect(socketaddr).unwrap();
+    let mut ssh = Session::new().unwrap();
+    ssh.set_tcp_stream(tcp);
+    ssh.handshake().unwrap();
+    let key = std::path::Path::new("/home/mito/.ssh/id_rsa");
+    ssh.userauth_pubkey_file("mito", None, key, None).unwrap();
+    let fs = ssh_filesystem::Sshfs::new(ssh);
+
+    fuser::mount2(fs, opt.mount_point, &options).unwrap();
 }
 
 /// コマンドラインオプション

@@ -11,3 +11,9 @@ keywords = ["utility", "filesystem", "linux", "ssh", "sftp"]
 
 [dependencies]
 clap = { version = "4.0.30", features = ["derive"] }
+dns-lookup = "1.0.8"
+env_logger = "0.10.0"
+fuser = "0.12.0"
+libc = "0.2.139"
+log = "0.4.17"
+ssh2 = "0.9.3"

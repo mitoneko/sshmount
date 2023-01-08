@@ -1,2 +1,7 @@
 /target
 /mnt
+/tex/*.aux
+/tex/*.log
+/tex/*.toc
+/tex/src
+/tex/_minted-list
