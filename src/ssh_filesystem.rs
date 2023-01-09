@@ -6,17 +6,17 @@ use libc::ENOENT;
 use log::debug;
 use ssh2::{Session, Sftp};
 use std::{
-    cmp::min,
     ffi::OsStr,
     path::{Path, PathBuf},
     time::{Duration, UNIX_EPOCH},
+    io::{Seek, Read},
 };
 
 pub struct Sshfs {
     _session: Session,
     sftp: Sftp,
     inodes: Inodes,
-    top_path: PathBuf,
+    _top_path: PathBuf,
 }
 
 impl Sshfs {
@@ -29,7 +29,7 @@ impl Sshfs {
             _session: session,
             sftp,
             inodes,
-            top_path,
+            _top_path: top_path,
         }
     }
 
@@ -88,7 +88,6 @@ impl Filesystem for Sshfs {
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
             Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, 0),
             Err(e) => {
-                debug!("[lookup]アトリビュートの取得に失敗 path={:?}", &path);
                 reply.error(e.0);
             }
         };
@@ -117,10 +116,8 @@ impl Filesystem for Sshfs {
             reply.error(libc::ENOENT);
             return;
         };
-        debug!("[readdir] inode={}, paht={:?}, offset={}",ino, &path, offset);
         match self.sftp.readdir(&path) {
             Ok(mut dir) => {
-                debug!("[readdir] 追加作業開始。dir_cnt={}", dir.len());
                 let cur_file_attr = ssh2::FileStat { 
                     size: None, 
                     uid: None, 
@@ -131,7 +128,6 @@ impl Filesystem for Sshfs {
                 }; // "." ".."の解決用attr ディレクトリであることのみを示す。
                 dir.insert(0, (Path::new("..").into(), cur_file_attr.clone()));
                 dir.insert(0, (Path::new(".").into(), cur_file_attr));
-                debug!("[readdir] 追加作業終了。 dir_cnt={}", dir.len());
                 let mut i = offset+1;
                 for f in dir.iter().skip(offset as usize) {
                     let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
@@ -152,7 +148,6 @@ impl Filesystem for Sshfs {
                             return;
                         }
                     };
-                    debug!("返信値追加　ino={}, offset={}, kind={:?}, name={:?}", ino, i, &filetype, &name);
                     if reply.add(ino, i, filetype, name) {break;}
                     i += 1;
                 }
@@ -187,13 +182,36 @@ impl Filesystem for Sshfs {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        if ino == 2 {
-            let offset = offset as usize;
-            let size = size as usize;
-            let ret_str = &CONTENTS[offset..min(CONTENTS.len() - 1, offset + size - 1)];
-            reply.data(ret_str.as_bytes());
-        } else {
-            reply.error(ENOENT);
+        let Some(path) = self.inodes.get_path(ino) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        match self.sftp.open(&path) {
+            Ok(mut f) => {
+                if let Err(e) = f.seek(std::io::SeekFrom::Start(offset as u64)) {
+                    reply.error(Error::from(e).0);
+                    return;
+                }
+                let mut buff = Vec::<u8>::new();
+                buff.resize(size as usize, 0u8);
+                let mut read_size : usize = 0;
+                while read_size < size as usize {
+                    match f.read(&mut buff[read_size..]) {
+                        Ok(s) => {
+                           if s == 0 {break;};
+                           read_size += s;
+                        }
+                        Err(e) => {
+                            reply.error(Error::from(e).0);
+                            return;
+                        }
+                    }
+                }
+                reply.data(&buff);
+            }
+            Err(e) => {
+                reply.error(Error::from(e).0);
+            }
         }
     }
 }
@@ -274,7 +292,34 @@ impl From<ssh2::Error> for Error {
     }
 }
     
-const CONTENTS: &str = "Hello fuse!\n";
+impl From<std::io::Error> for Error {
+    fn from(value : std::io::Error) -> Self {
+        use std::io::ErrorKind::*;
+        let eno = match value.kind() {
+            NotFound => libc::ENOENT,
+            PermissionDenied => libc::EACCES,
+            ConnectionRefused => libc::ECONNREFUSED,
+            ConnectionReset => libc::ECONNRESET,
+            ConnectionAborted => libc::ECONNABORTED,
+            NotConnected => libc::ENOTCONN,
+            AddrInUse => libc::EADDRINUSE,
+            AddrNotAvailable => libc::EADDRNOTAVAIL,
+            BrokenPipe => libc::EPIPE,
+            AlreadyExists => libc::EEXIST,
+            WouldBlock => libc::EWOULDBLOCK,
+            InvalidInput => libc::EINVAL,
+            InvalidData => libc::EILSEQ,
+            TimedOut => libc::ETIMEDOUT,
+            WriteZero => libc::EIO,
+            Interrupted => libc::EINTR,
+            Unsupported => libc::ENOTSUP,
+            UnexpectedEof => libc::EOF,
+            OutOfMemory => libc::ENOMEM,
+            _ => 0,
+        };
+        Self(eno)
+    }
+}
 
 #[cfg(test)]
 mod inode_test {
