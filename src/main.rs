@@ -4,7 +4,12 @@ use clap::Parser;
 use dns_lookup::lookup_host;
 use log::debug;
 use ssh2::Session;
-use std::net::TcpStream;
+use std::{
+    io::Read,
+    net::TcpStream,
+    path::{Path, PathBuf},
+    str,
+};
 
 fn main() {
     let opt = Opt::parse();
@@ -16,6 +21,7 @@ fn main() {
     if address.is_empty() {
         panic!("not found");
     }
+    // ssh接続作業
     let socketaddr = std::net::SocketAddr::from((address[0], 22));
     debug!("接続先: {:?}", socketaddr);
     let tcp = TcpStream::connect(socketaddr).unwrap();
@@ -23,12 +29,66 @@ fn main() {
     ssh.set_tcp_stream(tcp);
     ssh.handshake().unwrap();
     // 認証情報は、今は固定
-    let key = std::path::Path::new("/home/mito/.ssh/id_rsa");
+    let key = Path::new("/home/mito/.ssh/id_rsa");
     ssh.userauth_pubkey_file("mito", None, key, None).unwrap();
-    let fs = ssh_filesystem::Sshfs::new(ssh);
+    // リモートホストのトップディレクトリの生成
+    let path = make_remote_path(&opt, &ssh);
 
+    let fs = ssh_filesystem::Sshfs::new(ssh);
     let options = vec![fuser::MountOption::FSName("sshfs".to_string())];
     fuser::mount2(fs, opt.mount_point, &options).unwrap();
+}
+
+/// リモート接続先のpathの生成
+fn make_remote_path(opt: &Opt, session: &Session) -> PathBuf {
+    // パスの生成
+    let path = match opt.remote.path {
+        Some(ref p) => {
+            if p.is_absolute() {
+                p.clone()
+            } else {
+                let mut h = get_home_on_remote(session);
+                h.push(p);
+                h
+            }
+        }
+        None => get_home_on_remote(session),
+    };
+    // 生成したパスが実在するかを確認する
+    let sftp = session
+        .sftp()
+        .expect("接続作業中、リモートへのsftp接続に失敗しました。");
+    if !sftp
+        .stat(&path)
+        .expect("接続先のパスが見つかりません。")
+        .is_dir()
+    {
+        panic!("接続先のパスはディレクトリではありません。");
+    }
+
+    path
+}
+
+/// ssh接続先のカレントディレクトリを取得する
+fn get_home_on_remote(session: &Session) -> PathBuf {
+    let mut channel = session
+        .channel_session()
+        .expect("接続作業中、sshのチャンネル構築に失敗しました。");
+    channel
+        .exec("pwd")
+        .expect("HOMEディレクトリの取得に失敗しました。");
+    let mut buf = Vec::<u8>::new();
+    channel
+        .read_to_end(&mut buf)
+        .expect("HOMEディレクトリの取得に失敗しました(2)");
+    channel
+        .close()
+        .expect("接続作業中、sshチャンネルのクローズに失敗しました。");
+    str::from_utf8(&buf)
+        .expect("HOMEディレクトリの取得に失敗しました(3)")
+        .trim()
+        .parse::<PathBuf>()
+        .expect("HOMEディレクトリの取得に失敗しました(4)")
 }
 
 /// コマンドラインオプション
@@ -93,7 +153,11 @@ impl std::str::FromStr for RemoteName {
         };
         let (host, path) = match rest_str.split_once(':') {
             Some((h, p)) => (
-                h.trim().to_string(),
+                if !h.trim().is_empty() {
+                    h.trim().to_string()
+                } else {
+                    return Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string());
+                },
                 if !p.trim().is_empty() {
                     Some(std::path::PathBuf::from(p.trim().to_string()))
                 } else {
@@ -162,6 +226,13 @@ mod test {
         );
 
         let s = "mito@reterminal.local";
+        let r: Result<RemoteName, String> = s.parse();
+        assert_eq!(
+            r,
+            Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string())
+        );
+
+        let s = " mito @: ";
         let r: Result<RemoteName, String> = s.parse();
         assert_eq!(
             r,
