@@ -1,4 +1,6 @@
 /target
+/perf.data
+/perf.data.old
 /mnt
 /tex/*.aux
 /tex/*.log

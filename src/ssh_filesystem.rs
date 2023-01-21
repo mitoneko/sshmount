@@ -20,11 +20,12 @@ pub struct Sshfs {
 }
 
 impl Sshfs {
-    pub fn new(session: Session) -> Self {
+    pub fn new(session: Session, path: &Path) -> Self {
         let mut inodes = Inodes::new();
-        let top_path: PathBuf = Path::new("/home/mito").into();
+        let top_path: PathBuf = path.into();
         inodes.add(&top_path);
         let sftp = session.sftp().unwrap();
+        debug!("[Sshfs::new] connect path: <{:?}>, inodes=<{:?}>", &top_path, &inodes.list);
         Self {
             _session: session,
             sftp,
@@ -95,12 +96,16 @@ impl Filesystem for Sshfs {
 
     fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
         let Some(path) = self.inodes.get_path(ino) else {
+            debug!("[getattr] path取得失敗: inode={}", ino);
             reply.error(ENOENT);
             return;
         };
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
             Ok(attr) => reply.attr(&Duration::from_secs(1), &attr),
-            Err(e) => reply.error(e.0),
+            Err(e) => {
+                debug!("[getattr] getattr_from_ssh2エラー: {:?}", &e);
+                reply.error(e.0)
+            }
         };
     }
 
