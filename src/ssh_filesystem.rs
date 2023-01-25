@@ -3,13 +3,13 @@ use fuser::{
     FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use libc::ENOENT;
-use log::debug;
-use ssh2::{Session, Sftp};
+use log::{warn, debug};
+use ssh2::{Session, Sftp, OpenType, OpenFlags};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
-    time::{Duration, UNIX_EPOCH},
-    io::{Seek, Read},
+    time::{SystemTime,Duration, UNIX_EPOCH},
+    io::{Seek, Read, Write},
 };
 
 pub struct Sshfs {
@@ -76,6 +76,13 @@ impl Sshfs {
             ssh2::FileType::Other(_) => Err(Error(libc::EBADF)),
         }
     }
+
+    fn conv_timeornow2systemtime(time: &fuser::TimeOrNow) -> SystemTime {
+        match time {
+            fuser::TimeOrNow::SpecificTime(t) => *t,
+            fuser::TimeOrNow::Now => SystemTime::now(),
+        }
+    }
 }
 
 impl Filesystem for Sshfs {
@@ -101,9 +108,12 @@ impl Filesystem for Sshfs {
             return;
         };
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
-            Ok(attr) => reply.attr(&Duration::from_secs(1), &attr),
+            Ok(attr) => {
+                //debug!("[getattr]retrun attr: {:?}", &attr);
+                reply.attr(&Duration::from_secs(1), &attr);
+            }
             Err(e) => {
-                debug!("[getattr] getattr_from_ssh2エラー: {:?}", &e);
+                warn!("[getattr] getattr_from_ssh2エラー: {:?}", &e);
                 reply.error(e.0)
             }
         };
@@ -130,7 +140,7 @@ impl Filesystem for Sshfs {
                     perm: Some(libc::S_IFDIR), 
                     atime: None, 
                     mtime: None
-                }; // "." ".."の解決用attr ディレクトリであることのみを示す。
+                }; // "." ".."の解決用。 attr ディレクトリであることのみを示す。
                 dir.insert(0, (Path::new("..").into(), cur_file_attr.clone()));
                 dir.insert(0, (Path::new(".").into(), cur_file_attr));
                 let mut i = offset+1;
@@ -148,7 +158,7 @@ impl Filesystem for Sshfs {
                     let filetype = match Self::conv_file_kind_ssh2fuser(filetype) {
                         Ok(t) => t,
                         Err(e) => {
-                            debug!("[readdir]ファイルタイプ解析失敗: inode={}, name={:?}", ino, name);
+                            warn!("[readdir]ファイルタイプ解析失敗: inode={}, name={:?}", ino, name);
                             reply.error(e.0);
                             return;
                         }
@@ -159,7 +169,7 @@ impl Filesystem for Sshfs {
                 reply.ok();
             }
             Err(e) => {
-                debug!("ssh2::readdir内でエラー発生");
+                warn!("[readdir]ssh2::readdir内でエラー発生-- {:?}", e);
                 reply.error(Error::from(e).0);
             }
         };
@@ -217,6 +227,124 @@ impl Filesystem for Sshfs {
             Err(e) => {
                 reply.error(Error::from(e).0);
             }
+        }
+    }
+    
+    fn mknod(
+            &mut self,
+            req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            mode: u32,
+            umask: u32,
+            _rdev: u32,
+            reply: ReplyEntry,
+        ) {
+        if mode & libc::S_IFMT != libc::S_IFREG { reply.error(libc::EPERM); return;}   
+        let mode = mode & (!umask | libc::S_IFMT);
+        let Some(mut new_name) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        new_name.push(name);
+        if let Err(e) = self.sftp.open_mode(&new_name, OpenFlags::CREATE, mode as i32, OpenType::File) {
+            reply.error(Error::from(e).0);
+            return;
+        }
+        let new_attr = match self.getattr_from_ssh2(&new_name, req.uid(), req.gid()) {
+            Ok(a) => a,
+            Err(e) => {
+                reply.error(e.0);
+                return;
+            }
+        };
+        reply.entry(&Duration::from_secs(1), &new_attr, 0);
+    }
+
+    fn write(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            _fh: u64,
+            offset: i64,
+            data: &[u8],
+            _write_flags: u32,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            reply: fuser::ReplyWrite,
+        ) {
+        let Some(filename) = self.inodes.get_path(ino) else { 
+            reply.error(ENOENT);
+            return;
+        };
+        let mut file = match self.sftp.open_mode(&filename, ssh2::OpenFlags::WRITE, 0, ssh2::OpenType::File) {
+            Ok(file) => file,
+            Err(e) => {
+                reply.error(Error::from(e).0);
+                return;
+            },
+        };
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
+            reply.error(Error::from(e).0);
+            return;
+        }
+        let mut buf = data;
+        while !buf.is_empty() {
+            let cnt = match file.write(buf) {
+                Ok(cnt) => cnt,
+                Err(e) => {
+                    reply.error(Error::from(e).0);
+                    return;
+                }
+            };
+            buf = &buf[cnt..]; 
+        }
+        reply.written(data.len() as u32);
+    }
+
+    fn setattr(
+            &mut self,
+            req: &Request<'_>,
+            ino: u64,
+            mode: Option<u32>,
+            _uid: Option<u32>,
+            _gid: Option<u32>,
+            size: Option<u64>,
+            atime: Option<fuser::TimeOrNow>,
+            mtime: Option<fuser::TimeOrNow>,
+            _ctime: Option<std::time::SystemTime>,
+            _fh: Option<u64>,
+            _crtime: Option<std::time::SystemTime>,
+            _chgtime: Option<std::time::SystemTime>,
+            _bkuptime: Option<std::time::SystemTime>,
+            _flags: Option<u32>,
+            reply: ReplyAttr,
+        ) {
+        let stat = ssh2::FileStat{
+            size,
+            uid: None,
+            gid: None,
+            perm: mode,
+            atime: atime.map(|t| 
+                Self::conv_timeornow2systemtime(&t).duration_since(UNIX_EPOCH).unwrap().as_secs()
+            ),
+            mtime: mtime.map(|t|
+                Self::conv_timeornow2systemtime(&t).duration_since(UNIX_EPOCH).unwrap().as_secs()
+            ),
+        };
+        let Some(filename) = self.inodes.get_path(ino) else {
+             reply.error(ENOENT);
+             return;
+        };
+        match self.sftp.setstat(&filename, stat) {
+            Ok(_) => {
+                let stat = self.getattr_from_ssh2(&filename, req.uid(), req.gid());
+                match stat {
+                    Ok(s) => reply.attr(&Duration::from_secs(1), &s),
+                    Err(e) => reply.error(e.0),
+                }
+            },
+            Err(e) => reply.error(Error::from(e).0),
         }
     }
 }
