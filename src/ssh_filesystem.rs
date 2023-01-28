@@ -230,37 +230,6 @@ impl Filesystem for Sshfs {
         }
     }
     
-    fn mknod(
-            &mut self,
-            req: &Request<'_>,
-            parent: u64,
-            name: &OsStr,
-            mode: u32,
-            umask: u32,
-            _rdev: u32,
-            reply: ReplyEntry,
-        ) {
-        if mode & libc::S_IFMT != libc::S_IFREG { reply.error(libc::EPERM); return;}   
-        let mode = mode & (!umask | libc::S_IFMT);
-        let Some(mut new_name) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
-            return;
-        };
-        new_name.push(name);
-        if let Err(e) = self.sftp.open_mode(&new_name, OpenFlags::CREATE, mode as i32, OpenType::File) {
-            reply.error(Error::from(e).0);
-            return;
-        }
-        let new_attr = match self.getattr_from_ssh2(&new_name, req.uid(), req.gid()) {
-            Ok(a) => a,
-            Err(e) => {
-                reply.error(e.0);
-                return;
-            }
-        };
-        reply.entry(&Duration::from_secs(1), &new_attr, 0);
-    }
-
     fn write(
             &mut self,
             _req: &Request<'_>,
@@ -300,6 +269,52 @@ impl Filesystem for Sshfs {
             buf = &buf[cnt..]; 
         }
         reply.written(data.len() as u32);
+    }
+
+    fn mknod(
+            &mut self,
+            req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            mode: u32,
+            umask: u32,
+            _rdev: u32,
+            reply: ReplyEntry,
+        ) {
+        if mode & libc::S_IFMT != libc::S_IFREG { reply.error(libc::EPERM); return;}   
+        let mode = mode & (!umask | libc::S_IFMT);
+        let Some(mut new_name) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        new_name.push(name);
+        if let Err(e) = self.sftp.open_mode(&new_name, OpenFlags::CREATE, mode as i32, OpenType::File) {
+            reply.error(Error::from(e).0);
+            return;
+        }
+        let new_attr = match self.getattr_from_ssh2(&new_name, req.uid(), req.gid()) {
+            Ok(a) => a,
+            Err(e) => {
+                reply.error(e.0);
+                return;
+            }
+        };
+        reply.entry(&Duration::from_secs(1), &new_attr, 0);
+    }
+
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        let Some(mut path) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        path.push(name);
+        match self.sftp.unlink(&path) {
+            Ok(_) => {
+                self.inodes.del_inode_with_path(&path);
+                reply.ok();
+            }
+            Err(e) => reply.error(Error::from(e).0),
+        }
     }
 
     fn setattr(
@@ -385,6 +400,16 @@ impl Inodes {
     /// inodeからpathを取得する
     fn get_path(&self, inode: u64) -> Option<PathBuf> {
         self.list.get(&inode).map(|p| (*p).clone())
+    }
+
+    /// inodesから、inodeの登録を削除する
+    fn del_inode(&mut self, inode: u64) -> Option<u64> {
+        self.list.remove(&inode).map(|_| inode)
+    }
+
+    /// inodesから、pathの名前の登録を削除する
+    fn del_inode_with_path(&mut self, path: &Path) -> Option<u64> {
+        self.get_inode(path).map(|ino| self.del_inode(ino).unwrap())
     }
 }
 
