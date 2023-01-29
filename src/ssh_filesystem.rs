@@ -10,12 +10,14 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime,Duration, UNIX_EPOCH},
     io::{Seek, Read, Write},
+    collections::HashMap,
 };
 
 pub struct Sshfs {
     _session: Session,
     sftp: Sftp,
     inodes: Inodes,
+    fhandls: Fhandles, 
     _top_path: PathBuf,
 }
 
@@ -30,6 +32,7 @@ impl Sshfs {
             _session: session,
             sftp,
             inodes,
+            fhandls: Fhandles::new(),
             _top_path: top_path,
         }
     }
@@ -186,55 +189,89 @@ impl Filesystem for Sshfs {
         }
     }
 
+    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+        let Some(file_name) = self.inodes.get_path(ino) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+
+        let mut flags_ssh2 = OpenFlags::empty();
+        if flags & libc::O_WRONLY != 0 { flags_ssh2.insert(OpenFlags::WRITE); }
+        else if flags & libc::O_RDWR != 0 { flags_ssh2.insert(OpenFlags::READ); flags_ssh2.insert(OpenFlags::WRITE); }
+        else { flags_ssh2.insert(OpenFlags::READ); }
+        if flags & libc::O_APPEND != 0 { flags_ssh2.insert(OpenFlags::APPEND); }
+        if flags & libc::O_CREAT != 0 { flags_ssh2.insert(OpenFlags::CREATE); }
+        if flags & libc::O_TRUNC != 0 { flags_ssh2.insert(OpenFlags::TRUNCATE); }
+        if flags & libc::O_EXCL != 0 { flags_ssh2.insert(OpenFlags::EXCLUSIVE); }
+
+        debug!("[open] openflag = {:?}, bit = {:x}", &flags_ssh2, flags_ssh2.bits());
+        match self.sftp.open_mode(&file_name, flags_ssh2, 0o777, ssh2::OpenType::File) {
+            Ok(file) => {
+                let fh = self.fhandls.add_file(file);
+                reply.opened(fh, flags as u32);
+            }
+            Err(e) => reply.error(Error::from(e).0),
+        }
+    }
+
+    fn release(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            fh: u64,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            _flush: bool,
+            reply: fuser::ReplyEmpty,
+        ) {
+        self.fhandls.del_file(fh);
+        reply.ok();
+    }
+    
     fn read(
         &mut self,
         _req: &Request,
-        ino: u64,
-        _fh: u64,
+        _ino: u64,
+        fh: u64,
         offset: i64,
         size: u32,
         _flags: i32,
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        let Some(path) = self.inodes.get_path(ino) else {
-            reply.error(libc::ENOENT);
+        let Some(file) = self.fhandls.get_file(fh) else {
+            reply.error(libc::EINVAL);
             return;
         };
-        match self.sftp.open(&path) {
-            Ok(mut f) => {
-                if let Err(e) = f.seek(std::io::SeekFrom::Start(offset as u64)) {
+
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
+            reply.error(Error::from(e).0);
+            return;
+        }
+        let mut buff = Vec::<u8>::new();
+        buff.resize(size as usize, 0u8);
+        let mut read_size : usize = 0;
+        while read_size < size as usize {
+            match file.read(&mut buff[read_size..]) {
+                Ok(s) => {
+                   if s == 0 {break;};
+                   read_size += s;
+                }
+                Err(e) => {
                     reply.error(Error::from(e).0);
                     return;
                 }
-                let mut buff = Vec::<u8>::new();
-                buff.resize(size as usize, 0u8);
-                let mut read_size : usize = 0;
-                while read_size < size as usize {
-                    match f.read(&mut buff[read_size..]) {
-                        Ok(s) => {
-                           if s == 0 {break;};
-                           read_size += s;
-                        }
-                        Err(e) => {
-                            reply.error(Error::from(e).0);
-                            return;
-                        }
-                    }
-                }
-                reply.data(&buff);
-            }
-            Err(e) => {
-                reply.error(Error::from(e).0);
             }
         }
+        buff.resize(read_size, 0u8);
+        reply.data(&buff);
     }
     
     fn write(
             &mut self,
             _req: &Request<'_>,
-            ino: u64,
-            _fh: u64,
+            _ino: u64,
+            fh: u64,
             offset: i64,
             data: &[u8],
             _write_flags: u32,
@@ -242,17 +279,11 @@ impl Filesystem for Sshfs {
             _lock_owner: Option<u64>,
             reply: fuser::ReplyWrite,
         ) {
-        let Some(filename) = self.inodes.get_path(ino) else { 
-            reply.error(ENOENT);
-            return;
+        let Some(file) = self.fhandls.get_file(fh) else {
+            reply.error(libc::EINVAL);
+            return ;
         };
-        let mut file = match self.sftp.open_mode(&filename, ssh2::OpenFlags::WRITE, 0, ssh2::OpenType::File) {
-            Ok(file) => file,
-            Err(e) => {
-                reply.error(Error::from(e).0);
-                return;
-            },
-        };
+        
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
             reply.error(Error::from(e).0);
             return;
@@ -366,7 +397,7 @@ impl Filesystem for Sshfs {
 
 #[derive(Debug, Default)]
 struct Inodes {
-    list: std::collections::HashMap<u64, PathBuf>,
+    list: HashMap<u64, PathBuf>,
     max_inode: u64,
 }
 
@@ -411,6 +442,41 @@ impl Inodes {
     fn del_inode_with_path(&mut self, path: &Path) -> Option<u64> {
         self.get_inode(path).map(|ino| self.del_inode(ino).unwrap())
     }
+}
+
+struct Fhandles {
+    list: HashMap<u64, ssh2::File>,
+    next_handle: u64,
+}
+
+impl Fhandles {
+    fn new() -> Self {
+        Self {
+            list: HashMap::new(),
+            next_handle: 0,
+        }
+    }
+
+    fn add_file(&mut self, file: ssh2::File) -> u64 {
+        let handle = self.next_handle;
+        self.list.insert(handle, file);
+        self.next_handle += 1;
+        handle
+    }
+        
+    fn get_file(&mut self, fh: u64) -> Option<&mut ssh2::File> {
+        self.list.get_mut(&fh)
+    }
+
+    fn del_file(&mut self, fh: u64) {
+        self.list.remove(&fh); // 戻り値は捨てる。この時点でファイルはクローズ。
+        // ハンドルの再利用のため、次回ハンドルを調整
+        match self.list.keys().max() {
+            Some(&i) => self.next_handle = i + 1,
+            None => self.next_handle = 0,
+        }
+    }
+
 }
 
 #[derive(Debug, Clone, Copy)]
