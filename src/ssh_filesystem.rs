@@ -393,6 +393,54 @@ impl Filesystem for Sshfs {
             Err(e) => reply.error(Error::from(e).0),
         }
     }
+
+    fn rename(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            newparent: u64,
+            newname: &OsStr,
+            flags: u32,
+            reply: fuser::ReplyEmpty,
+        ) {
+        let Some(mut old_path) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        old_path.push(name);
+
+        let Some(mut new_path) = self.inodes.get_path(newparent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        new_path.push(newname);
+
+        let mut rename_flag = ssh2::RenameFlags::NATIVE;
+        if flags & libc::RENAME_EXCHANGE != 0 { rename_flag.insert(ssh2::RenameFlags::ATOMIC); }
+        if flags & libc::RENAME_NOREPLACE == 0 { // renameのOVERWRITEが効いてない。手動で消す。
+            if let Ok(stat) = self.sftp.lstat(&new_path) {
+                if stat.is_dir() {
+                    if let Err(e) = self.sftp.rmdir(&new_path) {
+                        reply.error(Error::from(e).0);
+                        return;
+                    }
+                } else if let Err(e) = self.sftp.unlink(&new_path) {
+                    reply.error(Error::from(e).0);
+                    return;
+                }
+                self.inodes.del_inode_with_path(&new_path);
+            }
+        }
+
+        match self.sftp.rename(&old_path, &new_path, Some(rename_flag)) {
+            Ok(_) => {
+                self.inodes.rename(&old_path, &new_path);
+                reply.ok();
+            }
+            Err(e) => reply.error(Error::from(e).0),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -441,6 +489,17 @@ impl Inodes {
     /// inodesから、pathの名前の登録を削除する
     fn del_inode_with_path(&mut self, path: &Path) -> Option<u64> {
         self.get_inode(path).map(|ino| self.del_inode(ino).unwrap())
+    }
+
+    /// 登録されているinodeのpathを変更する。
+    /// old_pathが存在しなければ、なにもしない。
+    fn rename(&mut self, old_path: &Path, new_path: &Path)  {
+        let Some(ino) = self.get_inode(old_path) else {
+            return;
+        };
+        if let Some(val) = self.list.get_mut(&ino) {
+            *val = new_path.into();
+        }
     }
 }
 
@@ -588,4 +647,22 @@ mod inode_test {
         assert_eq!(inodes.get_path(5), None);
         assert_eq!(inodes.get_path(3), Some(Path::new("test2/").into()));
     }
+
+    #[test]
+    fn inodes_rename() {
+        let mut inodes = make_inodes();
+        let old = Path::new("test2");
+        let new = Path::new("new_test");
+        let ino = inodes.get_inode(old).unwrap();
+        inodes.rename(old, new);
+        assert_eq!(inodes.get_path(ino), Some(new.into()));
+
+        let mut inodes = make_inodes();
+        let inodes2 = make_inodes();
+        inodes.rename(Path::new("nai"), Path::new("kawattenai"));
+        assert_eq!(inodes.list, inodes2.list);
+    }
+
+        
+
 }
