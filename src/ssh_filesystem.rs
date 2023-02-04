@@ -4,7 +4,7 @@ use fuser::{
 };
 use libc::ENOENT;
 use log::{warn, debug};
-use ssh2::{Session, Sftp, OpenType, OpenFlags};
+use ssh2::{Session, Sftp, OpenType, OpenFlags, ErrorCode};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -345,6 +345,56 @@ impl Filesystem for Sshfs {
                 reply.ok();
             }
             Err(e) => reply.error(Error::from(e).0),
+        }
+    }
+
+    fn mkdir(
+            &mut self,
+            req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            mode: u32,
+            umask: u32,
+            reply: ReplyEntry,
+        ) {
+        let Some(mut path) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        path.push(name);
+        
+        let mode = (mode & (!umask) & 0o777) as i32;
+        
+        match self.sftp.mkdir(&path, mode) {
+            Ok(_) => {
+                match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
+                    Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, 0),
+                    Err(e) => reply.error(e.0),
+                }
+            }
+            Err(e) => reply.error(Error::from(e).0),
+        }
+    }
+
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        let Some(mut path) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        path.push(name);
+        match self.sftp.rmdir(&path) {
+            Ok(_) => {
+                self.inodes.del_inode_with_path(&path);
+                reply.ok()
+            }
+            Err(e) => {
+                if e.code() == ErrorCode::Session(-31) { 
+                    // ssh2ライブラリの返すエラーが妙。置換しておく。
+                    reply.error(libc::ENOTEMPTY);
+                } else {
+                    reply.error(Error::from(e).0)
+                }
+            }
         }
     }
 

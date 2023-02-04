@@ -25,7 +25,7 @@ fn main() -> Result<(), String> {
         if let Some(mut f) = file {
             match SshConfig::default().parse(&mut f) {
                 Ok(c) => ssh_config = c,
-                Err(e) => eprintln!("警告:configファイル内にエラー -- {}", e),
+                Err(e) => eprintln!("警告:configファイル内にエラー -- {e}"),
             };
         };
     }
@@ -36,8 +36,7 @@ fn main() -> Result<(), String> {
     if let Some(ref n) = host_params.host_name {
         dns = n
     };
-    let address =
-        lookup_host(dns).map_err(|_| format!("接続先ホストが見つかりません。({})", dns))?;
+    let address = lookup_host(dns).map_err(|_| format!("接続先ホストが見つかりません。({dns})"))?;
 
     // ログイン名の確定
     let username: String = if let Some(n) = &opt.login_name {
@@ -48,7 +47,7 @@ fn main() -> Result<(), String> {
         n.clone()
     } else if let Some(n) = users::get_current_username() {
         n.to_str()
-            .ok_or_else(|| format!("ログインユーザ名不正。({:?})", n))?
+            .ok_or_else(|| format!("ログインユーザ名不正。({n:?})"))?
             .to_string()
     } else {
         Err("ユーザー名が取得できませんでした。")?
@@ -162,7 +161,7 @@ fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf, String> {
     // 生成したパスが実在するかを確認する
     let sftp = session
         .sftp()
-        .map_err(|e| format!("接続作業中、リモートへのsftp接続に失敗しました。-- {}", e))?;
+        .map_err(|e| format!("接続作業中、リモートへのsftp接続に失敗しました。-- {e}"))?;
     let file_stat = sftp
         .stat(&path)
         .map_err(|_| format!("接続先のパスが見つかりません。{:?}", &path))?;
@@ -174,7 +173,7 @@ fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf, String> {
     if file_stat.file_type().is_symlink() {
         path = sftp
             .readlink(&path)
-            .map_err(|e| format!("接続先のシンボリックリンクの解決に失敗しました。-- {}", e))?;
+            .map_err(|e| format!("接続先のシンボリックリンクの解決に失敗しました。-- {e}"))?;
         if !path.is_absolute() {
             let tmp = path;
             path = get_home_on_remote(session)?;
@@ -189,25 +188,22 @@ fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf, String> {
 fn get_home_on_remote(session: &Session) -> Result<PathBuf, String> {
     let mut channel = session
         .channel_session()
-        .map_err(|e| format!("接続作業中、sshのチャンネル構築に失敗しました。-- {}", e))?;
+        .map_err(|e| format!("接続作業中、sshのチャンネル構築に失敗しました。-- {e}"))?;
     channel
         .exec("pwd")
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました。-- {}", e))?;
+        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました。-- {e}"))?;
     let mut buf = Vec::<u8>::new();
     channel
         .read_to_end(&mut buf)
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(2) -- {}", e))?;
-    channel.close().map_err(|e| {
-        format!(
-            "接続作業中、sshチャンネルのクローズに失敗しました。-- {}",
-            e
-        )
-    })?;
+        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(2) -- {e}"))?;
+    channel
+        .close()
+        .map_err(|e| format!("接続作業中、sshチャンネルのクローズに失敗しました。-- {e}",))?;
     str::from_utf8(&buf)
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(3) -- {}", e))?
+        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(3) -- {e}"))?
         .trim()
         .parse::<PathBuf>()
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(4) -- {}", e))
+        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(4) -- {e}"))
 }
 
 /// コマンドラインオプション
