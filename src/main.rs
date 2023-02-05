@@ -74,8 +74,26 @@ fn main() -> Result<(), String> {
     // リモートホストのトップディレクトリの生成
     let path = make_remote_path(&opt, &ssh)?;
 
+    // マウントオプションの調整
+    let mut options = vec![fuser::MountOption::FSName("sshfs".to_string())];
+    options.push(fuser::MountOption::NoDev);
+    options.push(fuser::MountOption::DirSync);
+    options.push(fuser::MountOption::Sync);
+    match opt.readonly {
+        true => options.push(fuser::MountOption::RO),
+        false => options.push(fuser::MountOption::RW),
+    }
+    match opt.no_exec {
+        true => options.push(fuser::MountOption::NoExec),
+        false => options.push(fuser::MountOption::Exec),
+    }
+    match opt.no_atime {
+        true => options.push(fuser::MountOption::NoAtime),
+        false => options.push(fuser::MountOption::Atime),
+    }
+
+    // ファイルシステムへのマウント実行
     let fs = ssh_filesystem::Sshfs::new(ssh, &path);
-    let options = vec![fuser::MountOption::FSName("sshfs".to_string())];
     fuser::mount2(fs, opt.mount_point, &options).unwrap();
     Ok(())
 }
@@ -227,6 +245,15 @@ struct Opt {
     /// ポート番号
     #[arg(short, long, default_value_t = 22)]
     port: u16,
+    /// リードオンリー
+    #[arg(short, long)]
+    readonly: bool,
+    /// 実行不可
+    #[arg(long)]
+    no_exec: bool,
+    /// アクセス日時(atime)を変更しない。
+    #[arg(long)]
+    no_atime: bool,
 }
 
 /// 指定されたディレクトリが存在し、中にファイルがないことを確認する。
