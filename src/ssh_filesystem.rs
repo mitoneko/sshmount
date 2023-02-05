@@ -3,7 +3,7 @@ use fuser::{
     FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
 };
 use libc::ENOENT;
-use log::{warn, debug};
+use log::{error, warn, debug};
 use ssh2::{Session, Sftp, OpenType, OpenFlags, ErrorCode};
 use std::{
     ffi::OsStr,
@@ -180,12 +180,19 @@ impl Filesystem for Sshfs {
 
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
         let Some(path) = self.inodes.get_path(ino) else {
+            error!("[readlink] 親ディレクトリの検索に失敗 {ino}");
             reply.error(libc::ENOENT);
             return;
         };
         match self.sftp.readlink(&path) {
-            Ok(p) => reply.data(p.as_os_str().to_str().unwrap().as_bytes()),
-            Err(e) => reply.error(Error::from(e).0),
+            Ok(p) => {
+                //debug!("[readlink] ret_path => {:?}", &p);
+                reply.data(p.as_os_str().to_str().unwrap().as_bytes());
+            }
+            Err(e) => { 
+                //debug!("[readlink] ssh2::readlink error => {e:?}");
+                reply.error(Error::from(e).0);
+            }
         }
     }
 
@@ -395,6 +402,30 @@ impl Filesystem for Sshfs {
                     reply.error(Error::from(e).0)
                 }
             }
+        }
+    }
+
+    fn symlink(
+            &mut self,
+            req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            link: &Path,
+            reply: ReplyEntry,
+        ) {
+        let Some(mut target) = self.inodes.get_path(parent) else {
+            reply.error(libc::ENOENT);
+            return;
+        };
+        target.push(name);
+        match self.sftp.symlink(link, &target) {
+            Ok(_) => {
+                match self.getattr_from_ssh2(&target, req.uid(), req.gid()) {
+                    Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, 0),
+                    Err(e) => reply.error(e.0),
+                }
+            }
+            Err(e) => reply.error(Error::from(e).0),
         }
     }
 
