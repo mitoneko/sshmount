@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 authors = ["mito"]
 description = "ssh接続先のディレクトリをマウントする"
-license = "GPLv3"
+license = "Apache-2.0"
 keywords = ["utility", "filesystem", "linux", "ssh", "sftp"]
+categories = ["command-line-utilities", "filesystem"]
+repository = "https://github.com/mitoneko/sshmount.git"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
