@@ -44,7 +44,7 @@ fn exist_dir(s: &str) -> Result<String, String> {
             std::io::ErrorKind::NotFound => {
                 Err("マウント先ディレクトリが存在しません。".to_string())
             }
-            _ => Err("計り知れないエラーです。".to_string()),
+            _ => Err(format!("計り知れないエラーです。--{e}")),
         },
     }
 }

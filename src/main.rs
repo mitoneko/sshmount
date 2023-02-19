@@ -7,7 +7,7 @@ use dialoguer::Password;
 use dns_lookup::lookup_host;
 use log::debug;
 use ssh2::Session;
-use ssh2_config::SshConfig;
+use ssh2_config::{HostParams, SshConfig};
 use std::{
     fs::File,
     io::{BufReader, Read},
@@ -17,61 +17,10 @@ use std::{
 };
 
 fn main() -> Result<(), String> {
-    let opt = Opt::parse();
     env_logger::init();
+    let opt = Opt::parse();
 
-    // ssh configファイルの取得と解析
-    let mut ssh_config = SshConfig::default();
-    {
-        let file = get_config_file(&opt.config_file).map(BufReader::new);
-        if let Some(mut f) = file {
-            match SshConfig::default().parse(&mut f) {
-                Ok(c) => ssh_config = c,
-                Err(e) => eprintln!("警告:configファイル内にエラー -- {e}"),
-            };
-        };
-    }
-
-    // ssh configのエイリアスを解決し、接続アドレスの逆引き。
-    let mut dns = &opt.remote.host;
-    let host_params = ssh_config.query(dns);
-    if let Some(ref n) = host_params.host_name {
-        dns = n
-    };
-    let address = lookup_host(dns).map_err(|_| format!("接続先ホストが見つかりません。({dns})"))?;
-
-    // ログイン名の確定
-    let username: String = if let Some(n) = &opt.login_name {
-        n.clone()
-    } else if let Some(n) = &opt.remote.user {
-        n.clone()
-    } else if let Some(n) = &host_params.user {
-        n.clone()
-    } else if let Some(n) = users::get_current_username() {
-        n.to_str()
-            .ok_or_else(|| format!("ログインユーザ名不正。({n:?})"))?
-            .to_string()
-    } else {
-        Err("ユーザー名が取得できませんでした。")?
-    };
-    debug!("[main] ログインユーザー名: {}", &username);
-
-    // 秘密キーファイル名の取得
-    let identity_file: Option<PathBuf> = if let Some(ref i) = host_params.identity_file {
-        Some(i[0].clone())
-    } else {
-        opt.identity.as_ref().cloned()
-    };
-
-    // ssh接続作業
-    let socketaddr = std::net::SocketAddr::from((address[0], opt.port));
-    debug!("接続先: {:?}", socketaddr);
-    let tcp = TcpStream::connect(socketaddr).unwrap();
-    let mut ssh = Session::new().unwrap();
-    ssh.set_tcp_stream(tcp);
-    ssh.handshake().unwrap();
-    // ssh認証
-    userauth(&ssh, &username, &identity_file)?;
+    let ssh = make_ssh_session(&opt)?;
 
     // リモートホストのトップディレクトリの生成
     let path = make_remote_path(&opt, &ssh)?;
@@ -98,6 +47,95 @@ fn main() -> Result<(), String> {
     let fs = ssh_filesystem::Sshfs::new(ssh, &path);
     fuser::mount2(fs, opt.mount_point, &options).unwrap();
     Ok(())
+}
+
+/// セッションを生成する。
+fn make_ssh_session(opt: &Opt) -> Result<Session, String> {
+    let host_params = get_ssh_config(&opt.config_file).query(&opt.remote.host);
+    let address = get_address(opt, &host_params)?;
+    let username = get_username(opt, &host_params)?;
+    debug!(
+        "[main] 接続先情報-> ユーザー:\"{}\", ip address:{:?}",
+        &username, &address
+    );
+    let identity_file = get_identity_file(opt, &host_params);
+
+    let ssh = connect_ssh(address)?;
+    userauth(&ssh, &username, &identity_file)?;
+    Ok(ssh)
+}
+
+/// ホストのipアドレス解決
+fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr, String> {
+    let dns = host_params.host_name.as_deref().unwrap_or(&opt.remote.host);
+    let addr = lookup_host(dns).map_err(|_| format!("接続先ホストが見つかりません。({dns})"))?;
+    Ok(std::net::SocketAddr::from((addr[0], opt.port)))
+}
+
+/// ssh-configの取得と解析
+/// ファイル名が指定されていない場合は"~/.ssh/config"を使用
+/// configファイルのエラー及びファイルがない場合、デフォルト値を返す。
+fn get_ssh_config(file_opt: &Option<PathBuf>) -> SshConfig {
+    get_config_file(file_opt)
+        .map(BufReader::new)
+        .map_or(SshConfig::default(), |mut f| {
+            SshConfig::default().parse(&mut f).unwrap_or_else(|e| {
+                eprintln!("警告:configファイル内にエラー -- {e}");
+                SshConfig::default()
+            })
+        })
+}
+
+/// ssh_configファイルがあれば、オープンする。
+/// ファイル名の指定がなければ、$Home/.ssh/configを想定する。
+fn get_config_file(file_name: &Option<PathBuf>) -> Option<std::fs::File> {
+    let file_name = file_name.clone().or_else(|| {
+        home::home_dir().map(|p| {
+            let mut p = p;
+            p.push(".ssh/config");
+            p
+        })
+    });
+
+    file_name.and_then(|p| File::open(p).ok())
+}
+
+/// ログイン名を確定し、取得する。
+/// ログイン名指定の優先順位は、1. -u引数指定, 2.remote引数, 3.ssh_config指定, 4.現在のユーザー名
+fn get_username(opt: &Opt, params: &HostParams) -> Result<String, String> {
+    if let Some(n) = &opt.login_name {
+        Ok(n.clone())
+    } else if let Some(n) = &opt.remote.user {
+        Ok(n.clone())
+    } else if let Some(n) = &params.user {
+        Ok(n.clone())
+    } else if let Some(n) = users::get_current_username() {
+        n.to_str()
+            .ok_or_else(|| format!("ログインユーザ名不正。({n:?})"))
+            .map(|s| s.to_string())
+    } else {
+        Err("ユーザー名が取得できませんでした。")?
+    }
+}
+
+/// 秘密キーファイルのパスを取得する
+fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Option<PathBuf> {
+    if opt.identity.is_some() {
+        opt.identity.clone()
+    } else {
+        host_params.identity_file.as_ref().map(|p| p[0].clone())
+    }
+}
+
+/// リモートのsshに接続し、セッションを生成する。
+fn connect_ssh<A: std::net::ToSocketAddrs>(address: A) -> Result<Session, String> {
+    let tcp = TcpStream::connect(address)
+        .map_err(|e| format!("TCP/IPの接続に失敗しました -- {:?}", &e))?;
+    let mut ssh = Session::new().map_err(|e| format!("sshの接続に失敗しました。 -- {:?}", &e))?;
+    ssh.set_tcp_stream(tcp);
+    ssh.handshake()
+        .map_err(|e| format!("sshの接続に失敗しました。(2) -- {:?}", &e))?;
+    Ok(ssh)
 }
 
 /// ssh認証を実施する。
@@ -147,20 +185,6 @@ fn userauth(sess: &Session, username: &str, identity: &Option<PathBuf>) -> Resul
         debug!("認証失敗(password)->{:?}", ret.unwrap_err());
     }
     Err("sshの認証に失敗しました。".to_string())
-}
-
-/// ssh_configファイルがあれば、オープンする。
-/// ファイル名の指定がなければ、$Home/.ssh/configを想定する。
-fn get_config_file(file_name: &Option<PathBuf>) -> Option<std::fs::File> {
-    let file_name = file_name.clone().or_else(|| {
-        home::home_dir().map(|p| {
-            let mut p = p;
-            p.push(".ssh/config");
-            p
-        })
-    });
-
-    file_name.and_then(|p| File::open(p).ok())
 }
 
 /// リモート接続先のpathの生成
