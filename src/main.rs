@@ -4,7 +4,7 @@ mod ssh_filesystem;
 
 use clap::Parser;
 use cmdline_opt::Opt;
-use log::debug;
+//use log::debug;
 use ssh2::Session;
 use ssh_connect::make_ssh_session;
 use std::{io::Read, path::PathBuf, str};
@@ -15,30 +15,13 @@ fn main() -> Result<(), String> {
 
     let ssh = make_ssh_session(&opt)?;
 
-    // リモートホストのトップディレクトリの生成
     let path = make_remote_path(&opt, &ssh)?;
-
-    // マウントオプションの調整
-    let mut options = vec![fuser::MountOption::FSName("sshfs".to_string())];
-    options.push(fuser::MountOption::NoDev);
-    options.push(fuser::MountOption::DirSync);
-    options.push(fuser::MountOption::Sync);
-    match opt.readonly {
-        true => options.push(fuser::MountOption::RO),
-        false => options.push(fuser::MountOption::RW),
-    }
-    match opt.no_exec {
-        true => options.push(fuser::MountOption::NoExec),
-        false => options.push(fuser::MountOption::Exec),
-    }
-    match opt.no_atime {
-        true => options.push(fuser::MountOption::NoAtime),
-        false => options.push(fuser::MountOption::Atime),
-    }
+    let options = make_mount_option(&opt);
 
     // ファイルシステムへのマウント実行
     let fs = ssh_filesystem::Sshfs::new(ssh, &path);
-    fuser::mount2(fs, opt.mount_point, &options).unwrap();
+    fuser::mount2(fs, opt.mount_point, &options)
+        .map_err(|e| format!("fuseのマウントに失敗しました。 -- {e}"))?;
     Ok(())
 }
 
@@ -81,6 +64,29 @@ fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf, String> {
     };
 
     Ok(path)
+}
+
+/// FUSEの接続時オプションを生成する
+fn make_mount_option(cmd_opt: &Opt) -> Vec<fuser::MountOption> {
+    use fuser::MountOption;
+
+    let mut options = vec![MountOption::FSName("sshfs".to_string())];
+    options.push(MountOption::NoDev);
+    options.push(MountOption::DirSync);
+    options.push(MountOption::Sync);
+    match cmd_opt.readonly {
+        true => options.push(MountOption::RO),
+        false => options.push(MountOption::RW),
+    }
+    match cmd_opt.no_exec {
+        true => options.push(MountOption::NoExec),
+        false => options.push(MountOption::Exec),
+    }
+    match cmd_opt.no_atime {
+        true => options.push(MountOption::NoAtime),
+        false => options.push(MountOption::Atime),
+    }
+    options
 }
 
 /// ssh接続先のカレントディレクトリを取得する
