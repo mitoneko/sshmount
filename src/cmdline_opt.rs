@@ -44,7 +44,10 @@ fn exist_dir(s: &str) -> Result<String, String> {
             std::io::ErrorKind::NotFound => {
                 Err("マウント先ディレクトリが存在しません。".to_string())
             }
-            _ => Err(format!("計り知れないエラーです。--{e}")),
+            std::io::ErrorKind::NotConnected => {
+                Err("マウント先ディレクトリのネットワークが切断されています。(umountを忘れていませんか?)".to_string())
+            }
+            _ => Err(format!("計り知れないエラーです。--{e:?}")),
         },
     }
 }
