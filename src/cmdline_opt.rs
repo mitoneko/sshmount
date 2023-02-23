@@ -5,30 +5,30 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(author, version, about)]
 pub struct Opt {
-    /// 接続先 [user@]host:[path]
+    /// Distination [user@]host:[path]
     pub remote: RemoteName,
-    /// マウント先のパス
+    /// Path to mount
     #[arg(value_parser = exist_dir)]
     pub mount_point: String,
-    /// configファイルのパス指定
+    /// Path to config file
     #[arg(short = 'F', long)]
     pub config_file: Option<PathBuf>,
-    /// ログイン名
+    /// Login name
     #[arg(short, long)]
     pub login_name: Option<String>,
-    /// 秘密キーファイル名
+    /// File name of secret key file
     #[arg(short, long)]
     pub identity: Option<PathBuf>,
-    /// ポート番号
+    /// Port no
     #[arg(short, long, default_value_t = 22)]
     pub port: u16,
-    /// リードオンリー
+    /// Read only
     #[arg(short, long)]
     pub readonly: bool,
-    /// 実行不可
+    /// Not executable
     #[arg(long)]
     pub no_exec: bool,
-    /// アクセス日時(atime)を変更しない。
+    /// Do not change access date and time(atime)
     #[arg(long)]
     pub no_atime: bool,
 }

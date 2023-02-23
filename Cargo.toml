@@ -1,9 +1,9 @@
 [package]
 name = "sshmount"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["mito"]
-description = "ssh接続先のディレクトリをマウントする"
+description = "Mount the directory to which the ssh connection is made."
 license = "Apache-2.0"
 keywords = ["utility", "filesystem", "linux", "ssh", "sftp"]
 categories = ["command-line-utilities", "filesystem"]
