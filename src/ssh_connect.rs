@@ -1,6 +1,7 @@
 //! ssh接続関連関数モジュール
 
 use crate::cmdline_opt::Opt;
+use anyhow::{anyhow, Context, Result};
 use dialoguer::Password;
 use dns_lookup::lookup_host;
 use log::debug;
@@ -15,25 +16,25 @@ use std::{
 };
 
 /// セッションを生成する。
-pub fn make_ssh_session(opt: &Opt) -> Result<Session, String> {
+pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
     let host_params = get_ssh_config(&opt.config_file).query(&opt.remote.host);
-    let address = get_address(opt, &host_params)?;
-    let username = get_username(opt, &host_params)?;
+    let address = get_address(opt, &host_params).context("Failed to get host address")?;
+    let username = get_username(opt, &host_params).context("Failed to get user name.")?;
     debug!(
         "[main] 接続先情報-> ユーザー:\"{}\", ip address:{:?}",
         &username, &address
     );
     let identity_file = get_identity_file(opt, &host_params);
 
-    let ssh = connect_ssh(address)?;
-    userauth(&ssh, &username, &identity_file)?;
+    let ssh = connect_ssh(address).context("The ssh connection failed.")?;
+    userauth(&ssh, &username, &identity_file).context("User authentication failed.")?;
     Ok(ssh)
 }
 
 /// ホストのipアドレス解決
-fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr, String> {
+fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr> {
     let dns = host_params.host_name.as_deref().unwrap_or(&opt.remote.host);
-    let addr = lookup_host(dns).map_err(|_| format!("接続先ホストが見つかりません。({dns})"))?;
+    let addr = lookup_host(dns).context("Cannot find host to connect to.")?;
     Ok(std::net::SocketAddr::from((addr[0], opt.port)))
 }
 
@@ -67,7 +68,7 @@ fn get_config_file(file_name: &Option<PathBuf>) -> Option<std::fs::File> {
 
 /// ログイン名を確定し、取得する。
 /// ログイン名指定の優先順位は、1. -u引数指定, 2.remote引数, 3.ssh_config指定, 4.現在のユーザー名
-fn get_username(opt: &Opt, params: &HostParams) -> Result<String, String> {
+fn get_username(opt: &Opt, params: &HostParams) -> Result<String> {
     if let Some(n) = &opt.login_name {
         Ok(n.clone())
     } else if let Some(n) = &opt.remote.user {
@@ -76,10 +77,10 @@ fn get_username(opt: &Opt, params: &HostParams) -> Result<String, String> {
         Ok(n.clone())
     } else if let Some(n) = users::get_current_username() {
         n.to_str()
-            .ok_or_else(|| format!("ログインユーザ名不正。({n:?})"))
             .map(|s| s.to_string())
+            .ok_or(anyhow!("Invalid login user name. -- {n:?}"))
     } else {
-        Err("ユーザー名が取得できませんでした。")?
+        Err(anyhow!("Could not obtain user name."))
     }
 }
 
@@ -93,18 +94,16 @@ fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Option<PathBuf> {
 }
 
 /// リモートのsshに接続し、セッションを生成する。
-fn connect_ssh<A: std::net::ToSocketAddrs>(address: A) -> Result<Session, String> {
-    let tcp = TcpStream::connect(address)
-        .map_err(|e| format!("TCP/IPの接続に失敗しました -- {:?}", &e))?;
-    let mut ssh = Session::new().map_err(|e| format!("sshの接続に失敗しました。 -- {:?}", &e))?;
+fn connect_ssh<A: std::net::ToSocketAddrs>(address: A) -> Result<Session> {
+    let tcp = TcpStream::connect(address).context("Failed to connect to TCP/IP.")?;
+    let mut ssh = Session::new().context("Failed to connect to ssh.")?;
     ssh.set_tcp_stream(tcp);
-    ssh.handshake()
-        .map_err(|e| format!("sshの接続に失敗しました。(2) -- {:?}", &e))?;
+    ssh.handshake().context("Failed to hanshake ssh.")?;
     Ok(ssh)
 }
 
 /// ssh認証を実施する。
-fn userauth(sess: &Session, username: &str, identity: &Option<PathBuf>) -> Result<(), String> {
+fn userauth(sess: &Session, username: &str, identity: &Option<PathBuf>) -> Result<()> {
     if user_auth_agent(sess, username).is_ok() {
         return Ok(());
     }
@@ -114,6 +113,7 @@ fn userauth(sess: &Session, username: &str, identity: &Option<PathBuf>) -> Resul
         }
     }
     user_auth_password(sess, username)
+        .map_err(|_| anyhow!("All user authentication methods failed."))
 }
 
 /// agent認証
@@ -136,7 +136,7 @@ fn user_auth_identity(sess: &Session, username: &str, key_file: &Path) -> Result
         // LIBSSH2_ERROR_FILE:PUBLIC_KEYの取得失敗。多分、秘密キーのパスフレーズ
         for _i in 0..3 {
             let password = Password::new()
-                .with_prompt("秘密キーのパスフレーズを入力してください。")
+                .with_prompt("Enter the passphrase for the secret key.")
                 .allow_empty_password(true)
                 .interact()
                 .map_err(|e| e.to_string())?;
@@ -144,7 +144,7 @@ fn user_auth_identity(sess: &Session, username: &str, key_file: &Path) -> Result
             if ret.is_ok() {
                 return Ok(());
             }
-            eprintln!("パスフレーズが違います。");
+            eprintln!("The passphrase is different.");
         }
     }
     debug!("認証失敗(pubkey)->{:?}", ret.as_ref().unwrap_err());
@@ -155,7 +155,7 @@ fn user_auth_identity(sess: &Session, username: &str, key_file: &Path) -> Result
 fn user_auth_password(sess: &Session, username: &str) -> Result<(), String> {
     for _i in 0..3 {
         let password = Password::new()
-            .with_prompt("ログインパスワードを入力してください。")
+            .with_prompt("Enter your login password.")
             .allow_empty_password(true)
             .interact()
             .map_err(|e| e.to_string())?;
@@ -166,7 +166,7 @@ fn user_auth_password(sess: &Session, username: &str) -> Result<(), String> {
         let ssh2::ErrorCode::Session(-18) = ret.as_ref().unwrap_err().code() else { break; };
         // ssh2エラーコード　-18 ->
         // LIBSSH2_ERROR_AUTHENTICATION_FAILED: パスワードが違うんでしょう。
-        eprintln!("パスワードが違います。");
+        eprintln!("The password is different.");
         debug!("認証失敗(password)->{:?}", ret.unwrap_err());
     }
     Err("パスワード認証失敗".to_string())

@@ -71,7 +71,7 @@ impl std::fmt::Display for RemoteName {
 }
 
 impl std::str::FromStr for RemoteName {
-    type Err = String;
+    type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut rest_str = s;
         let user = match rest_str.split_once('@') {
@@ -90,7 +90,7 @@ impl std::str::FromStr for RemoteName {
                 if !h.trim().is_empty() {
                     h.trim().to_string()
                 } else {
-                    return Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string());
+                    return Err(Error);
                 },
                 if !p.trim().is_empty() {
                     Some(std::path::PathBuf::from(p.trim().to_string()))
@@ -98,11 +98,15 @@ impl std::str::FromStr for RemoteName {
                     None
                 },
             ),
-            None => return Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string()),
+            None => return Err(Error),
         };
         Ok(Self { user, host, path })
     }
 }
+
+#[derive(thiserror::Error, Debug)]
+#[error("接続先ホストの形式は、\"[user@]host:[path]\"です。")]
+pub struct Error;
 
 #[cfg(test)]
 mod test {
