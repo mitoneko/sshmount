@@ -1,43 +1,49 @@
 //! FUSEパラメータ関係　ユーティリティ
 
 use crate::cmdline_opt::Opt;
+use anyhow::{ensure, Context, Result};
 use ssh2::Session;
 use std::{io::Read, path::PathBuf, str};
 
 /// リモート接続先のpathの生成
-pub fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf, String> {
+pub fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf> {
     // パスの生成
+    const MSG_ERRORHOME: &str = "Fail to generate path name.";
     let mut path = match opt.remote.path {
         Some(ref p) => {
             if p.is_absolute() {
                 p.clone()
             } else {
-                let mut h = get_home_on_remote(session)?;
+                let mut h = get_home_on_remote(session).context(MSG_ERRORHOME)?;
                 h.push(p);
                 h
             }
         }
-        None => get_home_on_remote(session)?,
+        None => get_home_on_remote(session).context(MSG_ERRORHOME)?,
     };
     // 生成したパスが実在するかを確認する
     let sftp = session
         .sftp()
-        .map_err(|e| format!("接続作業中、リモートへのsftp接続に失敗しました。-- {e}"))?;
+        .context("Connection to SFTP failed when checking for existence of a path.")?;
     let file_stat = sftp
         .stat(&path)
-        .map_err(|_| format!("接続先のパスが見つかりません。{:?}", &path))?;
-    if !file_stat.is_dir() {
-        Err("接続先のパスはディレクトリではありません。")?;
-    };
+        .with_context(|| format!("Cannot find path to connect to. path={:?}", &path))?;
+    ensure!(
+        file_stat.is_dir(),
+        "The path to connect to is not a directory."
+    );
     // 生成したパスがシンボリックリンクのときは、リンク先を解決する
-    let file_stat = sftp.lstat(&path).unwrap();
+    let file_stat = sftp
+        .lstat(&path)
+        .context("Failed to obtain the attributes of the destination directory.")?;
     if file_stat.file_type().is_symlink() {
         path = sftp
             .readlink(&path)
-            .map_err(|e| format!("接続先のシンボリックリンクの解決に失敗しました。-- {e}"))?;
+            .context("Failed to resolve symbolic link to connect to.")?;
         if !path.is_absolute() {
             let tmp = path;
-            path = get_home_on_remote(session)?;
+            path = get_home_on_remote(session)
+                .context("Failed to complete the symbolic link to connect to.")?;
             path.push(tmp);
         };
     };
@@ -69,23 +75,21 @@ pub fn make_mount_option(cmd_opt: &Opt) -> Vec<fuser::MountOption> {
 }
 
 /// ssh接続先のカレントディレクトリを取得する
-fn get_home_on_remote(session: &Session) -> Result<PathBuf, String> {
+fn get_home_on_remote(session: &Session) -> Result<PathBuf> {
     let mut channel = session
         .channel_session()
-        .map_err(|e| format!("接続作業中、sshのチャンネル構築に失敗しました。-- {e}"))?;
+        .context("Fail to build ssh channel.")?;
     channel
         .exec("pwd")
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました。-- {e}"))?;
+        .context("Fail to execute \"pwd\" command.")?;
     let mut buf = Vec::<u8>::new();
     channel
         .read_to_end(&mut buf)
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(2) -- {e}"))?;
-    channel
-        .close()
-        .map_err(|e| format!("接続作業中、sshチャンネルのクローズに失敗しました。-- {e}",))?;
+        .context("Fail to get response for \"pwd\" command.")?;
+    channel.close().context("Fail to close ssh channel.")?;
     str::from_utf8(&buf)
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(3) -- {e}"))?
+        .context("The pwd result contains non-utf8 characters.")?
         .trim()
         .parse::<PathBuf>()
-        .map_err(|e| format!("HOMEディレクトリの取得に失敗しました(4) -- {e}"))
+        .context("Fail to build path name.")
 }

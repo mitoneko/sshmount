@@ -1,48 +1,53 @@
-# 概要
-　linuxシステムにおいて、ssh接続先のディレクトリをマウントするためのアプリです。
+[日本語はこちら](README-ja.md)
 
-# インストール[cargo]
- - rustの開発環境を用意してください。[Rustをインストール](https://www.rust-lang.org/ja/tools/install)
- - 「cargo install sshmount」を実行してください。
+# Overview
+　This application is used to mount the directory to which ssh connection is made on a linux system.
 
-# インストール[手動]
- - rustの開発環境を用意してください。[Rustをインストール](https://www.rust-lang.org/ja/tools/install)
- - リポジトリをクローンしてください。
- - クローンしたディレクトリで、「cargo build --release」を実行してください。
- - "target/release/sshmount"を適切なディレクトリにコピーして、直接実行してください。
+# Install [cargo].
+ - Prepare a development environment for rust. [Install Rust](https://www.rust-lang.org/ja/tools/install)
+ - Run "cargo install sshmount".
 
-# 使用方法
+# install [manual].
+ - Prepare a development environment for Rust. [Install Rust](https://www.rust-lang.org/ja/tools/install)
+ - Clone the repository.
+ - In the cloned directory, execute "cargo build --release".
+ - Copy "target/release/sshmount" to an appropriate directory and execute it directly.
+
+# Usage.
 
 ```
-ssh接続先のディレクトリをマウントする
+Mount the directory to which the ssh connection is made.
 
 Usage: sshmount [OPTIONS] <REMOTE> <MOUNT_POINT>
 
 Arguments:
-  <REMOTE>       接続先 [user@]host:[path]
-  <MOUNT_POINT>  マウント先のパス
+  <REMOTE>       Distination [user@]host:[path]
+  <MOUNT_POINT>  Path to mount
 
 Options:
-  -F, --config-file <CONFIG_FILE>  configファイルのパス指定
-  -l, --login-name <LOGIN_NAME>    ログイン名
-  -i, --identity <IDENTITY>        秘密キーファイル名
-  -p, --port <PORT>                ポート番号 [default: 22]
-  -h, --help                       Print help information
-  -V, --version                    Print version information
+  -F, --config-file <CONFIG_FILE>  Path to config file
+  -l, --login-name <LOGIN_NAME>    Login name
+  -i, --identity <IDENTITY>        File name of secret key file
+  -p, --port <PORT>                Port no [default: 22]
+  -r, --readonly                   Read only
+      --no-exec                    Not executable
+      --no-atime                   Do not change access date and time(atime)
+  -h, --help                       Print help
+  -V, --version                    Print version
 
 ```
 
- - 実行中は、コンソールをブロックするので、末尾に"&"をつけてバックグラウドで実行するか、別コンソールで作業をしてください。
- - マウント後、不要になった場合は、「umount <MOUNT_POINT>」でマウントを解除してください。
-   * sshmountを実行中のコンソールを閉じるなど、sshmountを強制的に終了させると中途半端なマウント状態が残ります。この場合も、「umount <MOUNT_POINT>」で解除してください。
- - configファイルに関しては、sshに準拠します。デフォルトは、「$HOME/.ssh/config」を使用します。
- - マウント先のディレクトリは空のディレクトリを用意してください。
- - リモートディレクトリ内のシンボリックリンクに関しては、マウントポイントより上位のディレクトリを経由しているものは、リンク先の参照が出来ません。
-   * 絶対パス指定の場合、必ずルートを経由するため、ルートをマウントした時以外は参照不可です。
-   * ローカル側でも有効なパスがリンク先になっている場合、ローカル側のファイルを参照します。
- - このユーティリティは、ユーザー権限で実行可能です。(sudo不要)
-   * sudo付きで実行すると、デフォルトユーザーで接続した時、rootでリモートにログインを試みます。
- - マウントしたディレクトリ内のファイルのユーザーとグループは、ローカル側でのユーザー名・グループ名が表示されます。ただし、権限のチェックは、接続時に指定したリモート側のユーザー名で実行されるので注意してください。
+ - While running, it blocks the console, so please add "&" at the end and run it in backgroud or work on a separate console.
+ - If you no longer need it after mounting, dismount it with "umount <MOUNT_POINT>".
+   * If you force sshmount to terminate, for example by closing the console on which sshmount is running, a halfway mounted state will remain. In this case, please use "umount <MOUNT_POINT>" to dismount.
+ - As for the config file, it conforms to ssh. The default is "$HOME/.ssh/config".
+ - Please prepare an empty directory for the mount destination directory.
+ - As for symbolic links in remote directories, those that go through directories higher than the mount point cannot refer to the link destination.
+   * If an absolute path is specified, it always goes through the root, so it cannot be referenced except when the root is mounted.
+   * If a path that is also valid on the local side is used as the link destination, the file on the local side is referenced.
+ - This utility can be run with user privileges. (no sudo required)
+   * When run with sudo, it will attempt to log in remotely as root when connecting as the default user.
+ - The user and group names of the files in the mounted directory will be displayed as the user and group names on the local side. Note, however, that > and permission checks are performed with the user name on the remote side that you specified when connecting.
 
-# ライセンス。
-　Apache License 2.0に準拠します。
+# License.
+　Conforms to the Apache License 2.0.

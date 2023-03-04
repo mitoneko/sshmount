@@ -5,30 +5,30 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(author, version, about)]
 pub struct Opt {
-    /// 接続先 [user@]host:[path]
+    /// Distination [user@]host:[path]
     pub remote: RemoteName,
-    /// マウント先のパス
+    /// Path to mount
     #[arg(value_parser = exist_dir)]
     pub mount_point: String,
-    /// configファイルのパス指定
+    /// Path to config file
     #[arg(short = 'F', long)]
     pub config_file: Option<PathBuf>,
-    /// ログイン名
+    /// Login name
     #[arg(short, long)]
     pub login_name: Option<String>,
-    /// 秘密キーファイル名
+    /// File name of secret key file
     #[arg(short, long)]
     pub identity: Option<PathBuf>,
-    /// ポート番号
+    /// Port no
     #[arg(short, long, default_value_t = 22)]
     pub port: u16,
-    /// リードオンリー
+    /// Read only
     #[arg(short, long)]
     pub readonly: bool,
-    /// 実行不可
+    /// Not executable
     #[arg(long)]
     pub no_exec: bool,
-    /// アクセス日時(atime)を変更しない。
+    /// Do not change access date and time(atime)
     #[arg(long)]
     pub no_atime: bool,
 }
@@ -71,7 +71,7 @@ impl std::fmt::Display for RemoteName {
 }
 
 impl std::str::FromStr for RemoteName {
-    type Err = String;
+    type Err = Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut rest_str = s;
         let user = match rest_str.split_once('@') {
@@ -90,7 +90,7 @@ impl std::str::FromStr for RemoteName {
                 if !h.trim().is_empty() {
                     h.trim().to_string()
                 } else {
-                    return Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string());
+                    return Err(Error);
                 },
                 if !p.trim().is_empty() {
                     Some(std::path::PathBuf::from(p.trim().to_string()))
@@ -98,11 +98,15 @@ impl std::str::FromStr for RemoteName {
                     None
                 },
             ),
-            None => return Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string()),
+            None => return Err(Error),
         };
         Ok(Self { user, host, path })
     }
 }
+
+#[derive(thiserror::Error, Debug)]
+#[error("接続先ホストの形式は、\"[user@]host:[path]\"です。")]
+pub struct Error;
 
 #[cfg(test)]
 mod test {
