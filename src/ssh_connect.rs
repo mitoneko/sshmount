@@ -24,7 +24,7 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
         "[main] 接続先情報-> ユーザー:\"{}\", ip address:{:?}",
         &username, &address
     );
-    let identity_file = get_identity_file(opt, &host_params);
+    let identity_file = get_identity_file(opt, &host_params)?;
 
     let ssh = connect_ssh(address).context("The ssh connection failed.")?;
     userauth(&ssh, &username, &identity_file).context("User authentication failed.")?;
@@ -85,11 +85,26 @@ fn get_username(opt: &Opt, params: &HostParams) -> Result<String> {
 }
 
 /// 秘密キーファイルのパスを取得する
-fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Option<PathBuf> {
-    if opt.identity.is_some() {
-        opt.identity.clone()
+fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Result<Option<PathBuf>> {
+    if let Some(n) = &opt.identity {
+        std::fs::File::open(n).with_context(|| {
+            format!(
+                "Unable to access the secret key file specified by the \"-i\" option. [{:?}]",
+                &n
+            )
+        })?;
+        Ok(Some(n.clone()))
     } else {
-        host_params.identity_file.as_ref().map(|p| p[0].clone())
+        let name = host_params.identity_file.as_ref().map(|p| p[0].clone());
+        if let Some(ref n) = name {
+            std::fs::File::open(n).with_context(|| {
+                format!(
+                    "Unnable to access the secret file specified by the ssh-config. [{:?}]",
+                    &n
+                )
+            })?;
+        }
+        Ok(name)
     }
 }
 
