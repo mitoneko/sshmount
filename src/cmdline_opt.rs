@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Context};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -34,20 +35,18 @@ pub struct Opt {
 }
 
 /// 指定されたディレクトリが存在し、中にファイルがないことを確認する。
-fn exist_dir(s: &str) -> Result<String, String> {
+fn exist_dir(s: &str) -> anyhow::Result<String> {
     match std::fs::read_dir(s) {
         Ok(mut dir) => match dir.next() {
             None => Ok(s.to_string()),
-            Some(_) => Err("マウント先ディレクトリが空ではありません".to_string()),
+            Some(_) => Err(anyhow!("Mount destination directory is not empty.")),
         },
         Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound => {
-                Err("マウント先ディレクトリが存在しません。".to_string())
-            }
-            std::io::ErrorKind::NotConnected => {
-                Err("マウント先ディレクトリのネットワークが切断されています。(umountを忘れていませんか?)".to_string())
-            }
-            _ => Err(format!("計り知れないエラーです。--{e:?}")),
+            std::io::ErrorKind::NotFound => Err(anyhow!("The mount directory does not exist.")),
+            std::io::ErrorKind::NotConnected => Err(anyhow!(
+                "The network of the mount directory is disconnected. (Did you forget to umount?)."
+            )),
+            _ => Err(e).context("Unexpected error.(check mount directory)"),
         },
     }
 }
@@ -71,7 +70,7 @@ impl std::fmt::Display for RemoteName {
 }
 
 impl std::str::FromStr for RemoteName {
-    type Err = Error;
+    type Err = ErrorRemoteName;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut rest_str = s;
         let user = match rest_str.split_once('@') {
@@ -90,7 +89,7 @@ impl std::str::FromStr for RemoteName {
                 if !h.trim().is_empty() {
                     h.trim().to_string()
                 } else {
-                    return Err(Error);
+                    return Err(ErrorRemoteName);
                 },
                 if !p.trim().is_empty() {
                     Some(std::path::PathBuf::from(p.trim().to_string()))
@@ -98,15 +97,15 @@ impl std::str::FromStr for RemoteName {
                     None
                 },
             ),
-            None => return Err(Error),
+            None => return Err(ErrorRemoteName),
         };
         Ok(Self { user, host, path })
     }
 }
 
 #[derive(thiserror::Error, Debug)]
-#[error("接続先ホストの形式は、\"[user@]host:[path]\"です。")]
-pub struct Error;
+#[error("The format of the host to connect to is \"[user@]host:[path]\".")]
+pub struct ErrorRemoteName;
 
 #[cfg(test)]
 mod test {
