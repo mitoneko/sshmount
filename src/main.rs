@@ -9,7 +9,6 @@ use cmdline_opt::Opt;
 use daemonize::Daemonize;
 use fuse_util::{make_full_path, make_mount_option, make_remote_path};
 use ssh_connect::make_ssh_session;
-use std::fs::File;
 //use log::debug;
 
 fn main() -> Result<()> {
@@ -24,14 +23,12 @@ fn main() -> Result<()> {
 
     // プロセスのデーモン化
     if opt.daemon {
-        let stderr = File::create("err.out").unwrap();
-        let daemonize = Daemonize::new().stderr(stderr);
+        let daemonize = Daemonize::new();
         if let Err(e) = daemonize.start() {
             eprintln!("daemonization filed.(error: {})", e);
         }
     }
     // ファイルシステムへのマウント実行
-    eprintln!("start fuse.");
     let fs = ssh_filesystem::Sshfs::new(ssh, &path);
     fuser::mount2(fs, mount_point, &options).context("Failed to mount FUSE.")?;
     Ok(())
