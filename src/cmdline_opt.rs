@@ -32,6 +32,9 @@ pub struct Opt {
     /// Do not change access date and time(atime)
     #[arg(long)]
     pub no_atime: bool,
+    /// run in daemon mode
+    #[arg(short, long)]
+    pub daemon: bool,
 }
 
 /// 指定されたディレクトリが存在し、中にファイルがないことを確認する。

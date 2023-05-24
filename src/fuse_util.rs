@@ -3,7 +3,23 @@
 use crate::cmdline_opt::Opt;
 use anyhow::{ensure, Context, Result};
 use ssh2::Session;
-use std::{io::Read, path::PathBuf, str};
+use std::env::current_dir;
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    str,
+};
+
+/// マウントポイントのフルパスを生成する
+pub fn make_full_path<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
+    if path.as_ref().is_absolute() {
+        Ok(path.as_ref().to_path_buf())
+    } else {
+        let mut full_path = current_dir().context("cannot access current directory.")?;
+        full_path.push(path);
+        Ok(full_path)
+    }
+}
 
 /// リモート接続先のpathの生成
 pub fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf> {

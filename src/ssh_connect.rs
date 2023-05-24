@@ -6,7 +6,7 @@ use dialoguer::Password;
 use dns_lookup::lookup_host;
 use log::debug;
 use ssh2::Session;
-use ssh2_config::{HostParams, SshConfig};
+use ssh2_config::{HostParams, ParseRule, SshConfig};
 use std::{
     fs::File,
     io::BufReader,
@@ -45,10 +45,12 @@ fn get_ssh_config(file_opt: &Option<PathBuf>) -> SshConfig {
     get_config_file(file_opt)
         .map(BufReader::new)
         .map_or(SshConfig::default(), |mut f| {
-            SshConfig::default().parse(&mut f).unwrap_or_else(|e| {
-                eprintln!("警告:configファイル内にエラー -- {e}");
-                SshConfig::default()
-            })
+            SshConfig::default()
+                .parse(&mut f, ParseRule::ALLOW_UNKNOWN_FIELDS)
+                .unwrap_or_else(|e| {
+                    eprintln!("警告:configファイル内にエラー -- {e}");
+                    SshConfig::default()
+                })
         })
 }
 

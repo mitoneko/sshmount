@@ -32,12 +32,13 @@ Options:
   -r, --readonly                   Read only
       --no-exec                    Not executable
       --no-atime                   Do not change access date and time(atime)
+  -d, --daemon                     run in daemon mode
   -h, --help                       Print help
   -V, --version                    Print version
 
 ```
 
- - While running, it blocks the console, so please add "&" at the end and run it in backgroud or work on a separate console.
+ - The console will be blocked during execution, so either run it in daemon mode with the -d option, or run it in the background with "&" appended to the end, or work on a separate console. 
  - If you no longer need it after mounting, dismount it with "umount <MOUNT_POINT>".
    * If you force sshmount to terminate, for example by closing the console on which sshmount is running, a halfway mounted state will remain. In this case, please use "umount <MOUNT_POINT>" to dismount.
  - As for the config file, it conforms to ssh. The default is "$HOME/.ssh/config".
