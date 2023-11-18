@@ -87,9 +87,9 @@ impl Sshfs {
 impl Filesystem for Sshfs {
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let Some(mut path) = self.inodes.get_path(parent) else {
-                debug!("[lookup] 親ディレクトリの検索に失敗 inode={}", parent);
-                reply.error(ENOENT);
-                return;
+            debug!("[lookup] 親ディレクトリの検索に失敗 inode={}", parent);
+            reply.error(ENOENT);
+            return;
         };
         path.push(Path::new(name));
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
@@ -276,8 +276,7 @@ impl Filesystem for Sshfs {
             reply.error(Error::from(e).0);
             return;
         }
-        let mut buff = Vec::<u8>::new();
-        buff.resize(size as usize, 0u8);
+        let mut buff = vec![0; size as usize];
         let mut read_size: usize = 0;
         while read_size < size as usize {
             match file.read(&mut buff[read_size..]) {
@@ -311,7 +310,7 @@ impl Filesystem for Sshfs {
     ) {
         let Some(file) = self.fhandls.get_file(fh) else {
             reply.error(libc::EINVAL);
-            return ;
+            return;
         };
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
@@ -491,8 +490,8 @@ impl Filesystem for Sshfs {
             }),
         };
         let Some(filename) = self.inodes.get_path(ino) else {
-             reply.error(ENOENT);
-             return;
+            reply.error(ENOENT);
+            return;
         };
         match self.sftp.setstat(&filename, stat) {
             Ok(_) => {
