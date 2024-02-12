@@ -1,6 +1,6 @@
 [package]
 name = "sshmount"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 authors = ["mito"]
 description = "Mount the directory to which the ssh connection is made."
@@ -18,7 +18,7 @@ clap = { version = "4.0.32", features = ["derive"] }
 daemonize = "0.5.0"
 dialoguer = "0.11"
 dns-lookup = "2"
-env_logger = "0.10.0"
+env_logger = "^0.11.0"
 fuser = "0.14"
 home = "0.5.4"
 libc = "0.2.139"
