@@ -226,7 +226,8 @@ impl Filesystem for Sshfs {
         }
 
         debug!(
-            "[open] openflag = {:?}, bit = {:x}",
+            "[open] filename='{:?}', openflag = {:?}, bit = {:x}",
+            &file_name,
             &flags_ssh2,
             flags_ssh2.bits()
         );
@@ -238,7 +239,15 @@ impl Filesystem for Sshfs {
                 let fh = self.fhandls.add_file(file);
                 reply.opened(fh, flags as u32);
             }
-            Err(e) => reply.error(Error::from(e).0),
+            Err(e) => {
+                log::error!(
+                    "file-open error: filename='{:?}', mode={:?}, err={}",
+                    &file_name,
+                    &flags_ssh2,
+                    &e
+                );
+                reply.error(Error::from(e).0);
+            }
         }
     }
 
