@@ -100,7 +100,7 @@ impl Filesystem for Sshfs {
         };
     }
 
-    fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&mut self, req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
         let Some(path) = self.inodes.get_path(ino) else {
             debug!("[getattr] path取得失敗: inode={}", ino);
             reply.error(ENOENT);

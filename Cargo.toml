@@ -1,6 +1,6 @@
 [package]
 name = "sshmount"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["mito"]
 description = "Mount the directory to which the ssh connection is made."
@@ -19,13 +19,13 @@ daemonize = "0.5.0"
 dialoguer = "0.11"
 dns-lookup = "2"
 env_logger = "^0.11.0"
-fuser = "0.14"
+fuser = "0.15"
 home = "0.5.4"
 libc = "0.2.139"
 log = "0.4.17"
 ssh2 = "0.9.3"
-ssh2-config = "0.2"
-thiserror = "1.0.38"
+ssh2-config = "0.3"
+thiserror = "2.0"
 users = "0.11.0"
 
 [profile.release]
