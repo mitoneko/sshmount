@@ -34,7 +34,9 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
 /// ホストのipアドレス解決
 fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr> {
     let dns = host_params.host_name.as_deref().unwrap_or(&opt.remote.host);
-    let addr = lookup_host(dns).context("Cannot find host to connect to.")?;
+    let addr = lookup_host(dns)
+        .context("Cannot find host to connect to.")?
+        .collect::<Vec<_>>();
     Ok(std::net::SocketAddr::from((addr[0], opt.port)))
 }
 
@@ -180,7 +182,9 @@ fn user_auth_password(sess: &Session, username: &str) -> Result<(), String> {
         if ret.is_ok() {
             return Ok(());
         }
-        let ssh2::ErrorCode::Session(-18) = ret.as_ref().unwrap_err().code() else { break; };
+        let ssh2::ErrorCode::Session(-18) = ret.as_ref().unwrap_err().code() else {
+            break;
+        };
         // ssh2エラーコード　-18 ->
         // LIBSSH2_ERROR_AUTHENTICATION_FAILED: パスワードが違うんでしょう。
         eprintln!("The password is different.");
