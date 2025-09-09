@@ -106,7 +106,7 @@ impl std::str::FromStr for RemoteName {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 #[error("The format of the host to connect to is \"[user@]host:[path]\".")]
 pub struct ErrorRemoteName;
 
@@ -159,24 +159,16 @@ mod test {
         assert_eq!(r, k);
 
         let s = "reterminal.local";
-        let r: Result<RemoteName, String> = s.parse();
-        assert_eq!(
-            r,
-            Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string())
-        );
+        let r: Result<RemoteName, ErrorRemoteName> = s.parse();
+        assert_eq!(r, Err(ErrorRemoteName));
 
         let s = "mito@reterminal.local";
-        let r: Result<RemoteName, String> = s.parse();
-        assert_eq!(
-            r,
-            Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string())
-        );
+        let r: Result<RemoteName, ErrorRemoteName> = s.parse();
+        assert_eq!(r, Err(ErrorRemoteName));
 
         let s = " mito @: ";
-        let r: Result<RemoteName, String> = s.parse();
-        assert_eq!(
-            r,
-            Err("接続先ホストの形式は、\"[user@]host:[path]\"です。".to_string())
-        );
+        let r: Result<RemoteName, ErrorRemoteName> = s.parse();
+        let i = 1;
+        assert_eq!(r, Err(ErrorRemoteName));
     }
 }
