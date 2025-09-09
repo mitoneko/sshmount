@@ -168,7 +168,6 @@ mod test {
 
         let s = " mito @: ";
         let r: Result<RemoteName, ErrorRemoteName> = s.parse();
-        let i = 1;
         assert_eq!(r, Err(ErrorRemoteName));
     }
 }
