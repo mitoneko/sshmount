@@ -17,6 +17,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Install fuse3
+        run: sudo apt-get install -y libfuse3-dev
+
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
 
