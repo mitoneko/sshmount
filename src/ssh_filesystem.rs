@@ -194,7 +194,7 @@ impl Filesystem for Sshfs {
         match self.sftp.readlink(&path) {
             Ok(p) => {
                 //debug!("[readlink] ret_path => {:?}", &p);
-                reply.data(p.as_os_str().to_str().unwrap().as_bytes());
+                reply.data(p.as_os_str().to_string_lossy().as_bytes());
             }
             Err(e) => {
                 //debug!("[readlink] ssh2::readlink error => {e:?}");
