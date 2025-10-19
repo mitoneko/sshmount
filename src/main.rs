@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         }
     }
     // ファイルシステムへのマウント実行
-    let fs = ssh_filesystem::Sshfs::new(ssh, &path);
+    let fs = ssh_filesystem::Sshfs::new(ssh, &path)?;
     fuser::mount2(fs, mount_point, &options).context("Failed to mount FUSE.")?;
     Ok(())
 }
