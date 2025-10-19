@@ -8,3 +8,5 @@
 /tex/*.out
 /tex/src
 /tex/_minted-list
+/tex/_minted
+issue.txt

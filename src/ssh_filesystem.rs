@@ -1,4 +1,4 @@
-/// FUSE ファイルシステム実装
+use anyhow::Context;
 use fuser::{FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
 use libc::ENOENT;
 use log::{debug, error, warn};
@@ -11,6 +11,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+/// FUSE ファイルシステム実装
 pub struct Sshfs {
     _session: Session,
     sftp: Sftp,
@@ -20,22 +21,27 @@ pub struct Sshfs {
 }
 
 impl Sshfs {
-    pub fn new(session: Session, path: &Path) -> Self {
+    pub fn new(session: Session, path: &Path) -> anyhow::Result<Self> {
         let mut inodes = Inodes::new();
         let top_path: PathBuf = path.into();
         inodes.add(&top_path);
-        let sftp = session.sftp().unwrap();
+        let sftp = session
+            .sftp()
+            .inspect_err(|_| {
+                error!("Failed to create sftp from session.");
+            })
+            .context("Failed to create sftp from session.(Sshfs::new)")?;
         debug!(
             "[Sshfs::new] connect path: <{:?}>, inodes=<{:?}>",
             &top_path, &inodes.list
         );
-        Self {
+        Ok(Self {
             _session: session,
             sftp,
             inodes,
             fhandls: Fhandles::new(),
             _top_path: top_path,
-        }
+        })
     }
 
     /// ssh2経由でファイルのステータスを取得する。
