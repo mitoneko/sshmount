@@ -28,9 +28,9 @@ impl Sshfs {
         let sftp = session
             .sftp()
             .inspect_err(|_| {
-                error!("Fail to create sftp from session.");
+                error!("Failed to create sftp from session.");
             })
-            .context("Fail to create sftp from session.(Sshfs::new)")?;
+            .context("Failed to create sftp from session.(Sshfs::new)")?;
         debug!(
             "[Sshfs::new] connect path: <{:?}>, inodes=<{:?}>",
             &top_path, &inodes.list
