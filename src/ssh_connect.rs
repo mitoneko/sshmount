@@ -40,7 +40,7 @@ fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAd
         .collect::<Vec<_>>();
     let addr = addr
         .first()
-        .ok_or(anyhow!("Unable to obtain DNS addres."))
+        .ok_or(anyhow!("Unable to obtain DNS address."))
         .inspect_err(|e| error!("get_address : {}", e))?;
     Ok(std::net::SocketAddr::from((*addr, opt.port)))
 }
