@@ -4,7 +4,7 @@ use crate::cmdline_opt::Opt;
 use anyhow::{anyhow, Context, Result};
 use dialoguer::Password;
 use dns_lookup::lookup_host;
-use log::debug;
+use log::{debug, error};
 use ssh2::Session;
 use ssh2_config::{HostParams, ParseRule, SshConfig};
 use std::{
@@ -35,9 +35,14 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
 fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr> {
     let dns = host_params.host_name.as_deref().unwrap_or(&opt.remote.host);
     let addr = lookup_host(dns)
+        .inspect_err(|e| error!("get_address : Failed lookup_host[{}]", e))
         .context("Cannot find host to connect to.")?
         .collect::<Vec<_>>();
-    Ok(std::net::SocketAddr::from((addr[0], opt.port)))
+    let addr = addr
+        .first()
+        .ok_or(anyhow!("Unable to obtain DNS address."))
+        .inspect_err(|e| error!("get_address : {}", e))?;
+    Ok(std::net::SocketAddr::from((*addr, opt.port)))
 }
 
 /// ssh-configの取得と解析
