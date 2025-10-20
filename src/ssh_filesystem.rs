@@ -494,13 +494,13 @@ impl Filesystem for Sshfs {
             atime: atime.map(|t| {
                 Self::conv_timeornow2systemtime(&t)
                     .duration_since(UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs()
             }),
             mtime: mtime.map(|t| {
                 Self::conv_timeornow2systemtime(&t)
                     .duration_since(UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs()
             }),
         };
