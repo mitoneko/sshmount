@@ -695,7 +695,10 @@ impl From<ssh2::Error> for Error {
                 19 => libc::ENOTDIR,      // not a directory
                 20 => libc::ENAMETOOLONG, // invalid file name
                 21 => libc::ELOOP,        // link loop
-                _ => 0,
+                _ => {
+                    error!("An unknown error occurred during SSH2.[{}]", i);
+                    libc::EIO
+                }
             },
         };
         Self(eno)
@@ -725,7 +728,13 @@ impl From<std::io::Error> for Error {
             Unsupported => libc::ENOTSUP,
             UnexpectedEof => libc::EOF,
             OutOfMemory => libc::ENOMEM,
-            _ => 0,
+            _ => {
+                error!(
+                    "An unknown error occurred during std::io.[{}]",
+                    value.kind()
+                );
+                libc::EIO
+            }
         };
         Self(eno)
     }
