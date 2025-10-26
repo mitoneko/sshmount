@@ -597,8 +597,15 @@ impl Inodes {
             None => {
                 self.max_inode += 1;
                 let path = PathBuf::from(path.as_ref());
-                if self.list.insert_no_overwrite(self.max_inode, path).is_err() {
-                    unreachable!("Unexpected duplicate inode {} or path {:?}", self.max_inode, path); // 既に重複がチェックされているので、ありえない。
+                if self
+                    .list
+                    .insert_no_overwrite(self.max_inode, path.clone())
+                    .is_err()
+                {
+                    unreachable!(
+                        "Unexpected duplicate inode {} or path {:?}",
+                        self.max_inode, path
+                    ); // 既に重複がチェックされているので、ありえない。
                 }
                 self.max_inode
             }
@@ -623,7 +630,7 @@ impl Inodes {
         self.list.remove_left(&inode).map(|_| inode)
     }
 
-    /// inodeから、pathの名前の登録を削除する
+    /// path名からiNodeの登録を削除する
     fn del_inode_with_path<P: AsRef<Path>>(&mut self, path: P) -> Option<u64> {
         let path = PathBuf::from(path.as_ref());
         self.list.remove_right(&path)
