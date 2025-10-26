@@ -598,7 +598,7 @@ impl Inodes {
                 self.max_inode += 1;
                 let path = PathBuf::from(path.as_ref());
                 if self.list.insert_no_overwrite(self.max_inode, path).is_err() {
-                    unreachable!(); // 既に重複がチェックされているので、ありえない。
+                    unreachable!("Unexpected duplicate inode {} or path {:?}", self.max_inode, path); // 既に重複がチェックされているので、ありえない。
                 }
                 self.max_inode
             }
