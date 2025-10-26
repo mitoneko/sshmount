@@ -6,6 +6,8 @@
 /tex/*.log
 /tex/*.toc
 /tex/*.out
+/tex/*.fdb_latexmk
+/tex/*.fls
 /tex/src
 /tex/_minted-list
 /tex/_minted
