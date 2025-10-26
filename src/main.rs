@@ -1,3 +1,4 @@
+mod bi_hash_map;
 mod cmdline_opt;
 mod fuse_util;
 mod ssh_connect;

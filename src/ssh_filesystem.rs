@@ -1,3 +1,5 @@
+use crate::bi_hash_map::*;
+
 use anyhow::Context;
 use fuser::{FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
 use libc::ENOENT;
@@ -574,7 +576,7 @@ impl Filesystem for Sshfs {
 
 #[derive(Debug, Default)]
 struct Inodes {
-    list: HashMap<u64, PathBuf>,
+    list: BiHashMap<u64, PathBuf>,
     max_inode: u64,
 }
 
@@ -582,53 +584,60 @@ impl Inodes {
     /// Inodeを生成する
     fn new() -> Self {
         Self {
-            list: std::collections::HashMap::new(),
+            list: BiHashMap::new(),
             max_inode: 0,
         }
     }
 
     /// pathで指定されたinodeを生成し、登録する。
     /// すでにpathの登録が存在する場合、追加はせず、登録済みのinodeを返す。
-    fn add(&mut self, path: &Path) -> u64 {
-        match self.get_inode(path) {
+    fn add<P: AsRef<Path>>(&mut self, path: P) -> u64 {
+        match self.get_inode(&path) {
             Some(i) => i,
             None => {
                 self.max_inode += 1;
-                self.list.insert(self.max_inode, path.into());
+                let path = PathBuf::from(path.as_ref());
+                if self.list.insert_no_overwrite(self.max_inode, path).is_err() {
+                    unreachable!(); // 既に重複がチェックされているので、ありえない。
+                }
                 self.max_inode
             }
         }
     }
 
     /// pathからinodeを取得する
-    fn get_inode(&self, path: &Path) -> Option<u64> {
-        self.list.iter().find(|(_, p)| path == *p).map(|(i, _)| *i)
+    fn get_inode<P: AsRef<Path>>(&self, path: P) -> Option<u64> {
+        let path = PathBuf::from(path.as_ref());
+        self.list.get_left(&path).copied()
     }
 
     /// inodeからpathを取得する
     fn get_path(&self, inode: u64) -> Option<PathBuf> {
-        self.list.get(&inode).map(|p| (*p).clone())
+        self.list.get_right(&inode).cloned()
     }
 
     /// inodesから、inodeの登録を削除する
+    /// (主用途がなくなっちゃったけど、将来のために残しておく)
+    #[allow(dead_code)]
     fn del_inode(&mut self, inode: u64) -> Option<u64> {
-        self.list.remove(&inode).map(|_| inode)
+        self.list.remove_left(&inode).map(|_| inode)
     }
 
-    /// inodesから、pathの名前の登録を削除する
-    fn del_inode_with_path(&mut self, path: &Path) -> Option<u64> {
-        self.get_inode(path).map(|ino| self.del_inode(ino).unwrap())
+    /// inodeから、pathの名前の登録を削除する
+    fn del_inode_with_path<P: AsRef<Path>>(&mut self, path: P) -> Option<u64> {
+        let path = PathBuf::from(path.as_ref());
+        self.list.remove_right(&path)
     }
 
     /// 登録されているinodeのpathを変更する。
     /// old_pathが存在しなければ、なにもしない。
-    fn rename(&mut self, old_path: &Path, new_path: &Path) {
+    fn rename<P: AsRef<Path>>(&mut self, old_path: P, new_path: P) {
         let Some(ino) = self.get_inode(old_path) else {
             return;
         };
-        if let Some(val) = self.list.get_mut(&ino) {
-            *val = new_path.into();
-        }
+        self.list.remove_left(&ino);
+        let new_path = PathBuf::from(new_path.as_ref());
+        self.list.insert(ino, new_path);
     }
 }
 
