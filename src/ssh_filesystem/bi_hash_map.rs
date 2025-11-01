@@ -5,7 +5,7 @@ use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 /// 双方向ハッシュマップ
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct BiHashMap<L, R>
+pub(super) struct BiHashMap<L, R>
 where
     L: Hash + Eq + Clone,
     R: Hash + Eq + Clone,
