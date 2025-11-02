@@ -32,8 +32,8 @@ impl Fhandles {
         // よって、このモジュール内において、lock().unwrap()とする。
     }
 
-    pub(super) fn get_file(&mut self, fh: u64) -> Option<Arc<Mutex<ssh2::File>>> {
-        self.list.lock().unwrap().get_mut(&fh).cloned()
+    pub(super) fn get_file(&self, fh: u64) -> Option<Arc<Mutex<ssh2::File>>> {
+        self.list.lock().unwrap().get(&fh).cloned()
     }
 
     pub(super) fn del_file(&mut self, fh: u64) {
