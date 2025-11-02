@@ -1,38 +1,39 @@
 //! ファイルハンドル管理モジュール
 
 use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 /// ファイルハンドル管理構造体
 pub(super) struct Fhandles {
-    list: HashMap<u64, ssh2::File>,
-    next_handle: u64,
+    list: Mutex<HashMap<u64, Arc<Mutex<ssh2::File>>>>,
+    next_handle: AtomicU64,
 }
 
 impl Fhandles {
     pub(super) fn new() -> Self {
         Self {
-            list: HashMap::new(),
-            next_handle: 0,
+            list: Mutex::new(HashMap::new()),
+            next_handle: AtomicU64::new(0),
         }
     }
 
     pub(super) fn add_file(&mut self, file: ssh2::File) -> u64 {
-        let handle = self.next_handle;
-        self.list.insert(handle, file);
-        self.next_handle += 1;
+        let handle = self.next_handle.fetch_add(1, Ordering::AcqRel);
+        self.list
+            .lock()
+            .unwrap()
+            .insert(handle, Arc::new(Mutex::new(file)));
         handle
     }
 
-    pub(super) fn get_file(&mut self, fh: u64) -> Option<&mut ssh2::File> {
-        self.list.get_mut(&fh)
+    pub(super) fn get_file(&mut self, fh: u64) -> Option<Arc<Mutex<ssh2::File>>> {
+        self.list.lock().unwrap().get_mut(&fh).cloned()
     }
 
     pub(super) fn del_file(&mut self, fh: u64) {
-        self.list.remove(&fh); // 戻り値は捨てる。この時点でファイルはクローズ。
-                               // ハンドルの再利用のため、次回ハンドルを調整
-        match self.list.keys().max() {
-            Some(&i) => self.next_handle = i + 1,
-            None => self.next_handle = 0,
-        }
+        self.list.lock().unwrap().remove(&fh); // 戻り値は捨てる。この時点でファイルはクローズ。
     }
 }

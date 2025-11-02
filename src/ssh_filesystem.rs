@@ -288,10 +288,11 @@ impl Filesystem for Sshfs {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        let Some(file) = self.fhandls.get_file(fh) else {
+        let Some(file_mutex) = self.fhandls.get_file(fh) else {
             reply.error(libc::EINVAL);
             return;
         };
+        let mut file = file_mutex.lock().unwrap();
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
             reply.error(Error::from(e).0);
@@ -329,10 +330,11 @@ impl Filesystem for Sshfs {
         _lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
-        let Some(file) = self.fhandls.get_file(fh) else {
+        let Some(file_mutex) = self.fhandls.get_file(fh) else {
             reply.error(libc::EINVAL);
             return;
         };
+        let file = &mut file_mutex.lock().unwrap();
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
             reply.error(Error::from(e).0);
