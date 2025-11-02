@@ -293,6 +293,10 @@ impl Filesystem for Sshfs {
             return;
         };
         let mut file = file_mutex.lock().unwrap();
+        // 注釈:このデータの出所であるFhandles構造体内のデータに毒化があるということは、
+        // システム全域の他のファイルハンドルの正当性も保証できないことを意味する。
+        // ファイル操作を失敗させることより、システム全体を落とすことが正しい選択と思われる。
+        // よって、lock().unwrap()とする。write()関数他においても同様。
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
             reply.error(Error::from(e).0);

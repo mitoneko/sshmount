@@ -27,6 +27,9 @@ impl Fhandles {
             .unwrap()
             .insert(handle, Arc::new(Mutex::new(file)));
         handle
+        // 注釈:このリストが毒化されたら、もはや、全システムにわたり、ファイル操作の正当性を保証できない。
+        // プログラムとしてできることは即座にシステムを落とすことだけである。
+        // よって、このモジュール内において、lock().unwrap()とする。
     }
 
     pub(super) fn get_file(&mut self, fh: u64) -> Option<Arc<Mutex<ssh2::File>>> {
