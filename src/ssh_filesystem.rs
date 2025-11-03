@@ -12,7 +12,7 @@ use log::{debug, error, warn};
 use ssh2::{ErrorCode, OpenFlags, OpenType, Session, Sftp};
 use std::{
     ffi::OsStr,
-    io::{Read, Seek, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -356,6 +356,39 @@ impl Filesystem for Sshfs {
             buf = &buf[cnt..];
         }
         reply.written(data.len() as u32);
+    }
+
+    fn lseek(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        fh: u64,
+        offset: i64,
+        whence: i32,
+        reply: fuser::ReplyLseek,
+    ) {
+        let seek_from = match whence {
+            libc::SEEK_SET => SeekFrom::Start(offset as u64),
+            libc::SEEK_CUR => SeekFrom::Current(offset),
+            libc::SEEK_END => SeekFrom::End(offset),
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+        let Some(file_mutex) = self.fhandls.get_file(fh) else {
+            reply.error(libc::EBADF);
+            return;
+        };
+        let file = &mut file_mutex.lock().unwrap();
+        let pos = match file.seek(seek_from) {
+            Ok(p) => p,
+            Err(e) => {
+                reply.error(Error::from(e).0);
+                return;
+            }
+        };
+        reply.offset(pos as i64);
     }
 
     fn mknod(
