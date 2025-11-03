@@ -77,12 +77,12 @@ impl Inodes {
     pub(super) fn rename<P: AsRef<Path>>(&mut self, old_path: P, new_path: P) {
         let old_path = PathBuf::from(old_path.as_ref());
         let new_path = PathBuf::from(new_path.as_ref());
-        let mut list_gaurd = self.list.lock().unwrap();
-        let Some(ino) = list_gaurd.get_left(&old_path).copied() else {
+        let mut list_guard = self.list.lock().unwrap();
+        let Some(ino) = list_guard.get_left(&old_path).copied() else {
             return;
         };
-        list_gaurd.remove_left(&ino);
-        list_gaurd.insert(ino, new_path);
+        list_guard.remove_left(&ino);
+        list_guard.insert(ino, new_path);
     }
 }
 
