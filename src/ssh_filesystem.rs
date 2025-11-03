@@ -27,9 +27,9 @@ pub struct Sshfs {
 }
 
 impl Sshfs {
-    pub fn new(session: Session, path: &Path) -> anyhow::Result<Self> {
+    pub fn new<P: AsRef<Path>>(session: Session, path: P) -> anyhow::Result<Self> {
         let mut inodes = Inodes::new();
-        let top_path: PathBuf = path.into();
+        let top_path: PathBuf = path.as_ref().into();
         inodes.add(&top_path);
         let sftp = session
             .sftp()
