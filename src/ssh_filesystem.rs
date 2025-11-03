@@ -289,7 +289,7 @@ impl Filesystem for Sshfs {
         reply: ReplyData,
     ) {
         let Some(file_mutex) = self.fhandls.get_file(fh) else {
-            reply.error(libc::EINVAL);
+            reply.error(libc::EBADF);
             return;
         };
         let mut file = file_mutex.lock().unwrap();
@@ -335,7 +335,7 @@ impl Filesystem for Sshfs {
         reply: fuser::ReplyWrite,
     ) {
         let Some(file_mutex) = self.fhandls.get_file(fh) else {
-            reply.error(libc::EINVAL);
+            reply.error(libc::EBADF);
             return;
         };
         let file = &mut file_mutex.lock().unwrap();
