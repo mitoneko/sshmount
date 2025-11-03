@@ -368,7 +368,14 @@ impl Filesystem for Sshfs {
         reply: fuser::ReplyLseek,
     ) {
         let seek_from = match whence {
-            libc::SEEK_SET => SeekFrom::Start(offset as u64),
+            libc::SEEK_SET => {
+                if offset >= 0 {
+                    SeekFrom::Start(offset as u64)
+                } else {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            }
             libc::SEEK_CUR => SeekFrom::Current(offset),
             libc::SEEK_END => SeekFrom::End(offset),
             _ => {
