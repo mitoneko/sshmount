@@ -98,6 +98,7 @@ impl Sshfs {
 
 impl Filesystem for Sshfs {
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        debug!("[lookup] start: parent={}, name={:?}", parent, name);
         let Some(mut path) = self.inodes.get_path(parent) else {
             debug!("[lookup] 親ディレクトリの検索に失敗 inode={}", parent);
             reply.error(ENOENT);
@@ -113,6 +114,7 @@ impl Filesystem for Sshfs {
     }
 
     fn getattr(&mut self, req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+        debug!("[getattr] start: ino={}", ino);
         let Some(path) = self.inodes.get_path(ino) else {
             debug!("[getattr] path取得失敗: inode={}", ino);
             reply.error(ENOENT);
@@ -138,6 +140,7 @@ impl Filesystem for Sshfs {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        debug!("[readdir] start: ino={}, offset={}", ino, offset);
         let Some(path) = self.inodes.get_path(ino) else {
             reply.error(libc::ENOENT);
             return;
@@ -192,6 +195,7 @@ impl Filesystem for Sshfs {
     }
 
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
+        debug!("[readlink] start: ino={}", ino);
         let Some(path) = self.inodes.get_path(ino) else {
             error!("[readlink] 親ディレクトリの検索に失敗 {ino}");
             reply.error(libc::ENOENT);
@@ -210,6 +214,7 @@ impl Filesystem for Sshfs {
     }
 
     fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+        debug!("[open] start: ino={}, flags={:x}", ino, flags);
         let Some(file_name) = self.inodes.get_path(ino) else {
             reply.error(libc::ENOENT);
             return;
@@ -273,6 +278,7 @@ impl Filesystem for Sshfs {
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
+        debug!("[release] start: fh={}", fh);
         self.fhandls.del_file(fh);
         reply.ok();
     }
@@ -288,6 +294,7 @@ impl Filesystem for Sshfs {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
+        debug!("[read] start: fh={}, offset={}, size={}", fh, offset, size);
         let Some(file_mutex) = self.fhandls.get_file(fh) else {
             reply.error(libc::EBADF);
             return;
@@ -334,6 +341,12 @@ impl Filesystem for Sshfs {
         _lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
+        debug!(
+            "[write] start: fh={}, offset={}, size={}",
+            fh,
+            offset,
+            data.len()
+        );
         let Some(file_mutex) = self.fhandls.get_file(fh) else {
             reply.error(libc::EBADF);
             return;
@@ -367,6 +380,10 @@ impl Filesystem for Sshfs {
         whence: i32,
         reply: fuser::ReplyLseek,
     ) {
+        debug!(
+            "[lseek] start: fh={}, offset={}, whence={}",
+            fh, offset, whence
+        );
         let seek_from = match whence {
             libc::SEEK_SET => {
                 if offset >= 0 {
@@ -408,6 +425,10 @@ impl Filesystem for Sshfs {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
+        debug!(
+            "[mknod] start: parent={}, name={:?}, mode={:o}, umask={:o}",
+            parent, name, mode, umask
+        );
         if mode & libc::S_IFMT != libc::S_IFREG {
             reply.error(libc::EPERM);
             return;
@@ -436,6 +457,7 @@ impl Filesystem for Sshfs {
     }
 
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        debug!("[unlink] start: parent={}, name={:?}", parent, name);
         let Some(mut path) = self.inodes.get_path(parent) else {
             reply.error(libc::ENOENT);
             return;
@@ -459,6 +481,10 @@ impl Filesystem for Sshfs {
         umask: u32,
         reply: ReplyEntry,
     ) {
+        debug!(
+            "[mkdir] start: parent={}, name={:?}, mode={:o}, umask={:o}",
+            parent, name, mode, umask
+        );
         let Some(mut path) = self.inodes.get_path(parent) else {
             reply.error(libc::ENOENT);
             return;
@@ -477,6 +503,7 @@ impl Filesystem for Sshfs {
     }
 
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        debug!("[rmdir] start: parent={}, name={:?}", parent, name);
         let Some(mut path) = self.inodes.get_path(parent) else {
             reply.error(libc::ENOENT);
             return;
@@ -506,6 +533,10 @@ impl Filesystem for Sshfs {
         link: &Path,
         reply: ReplyEntry,
     ) {
+        debug!(
+            "[symlink] start: parent={}, name={:?}, link={:?}",
+            parent, name, link
+        );
         let Some(mut target) = self.inodes.get_path(parent) else {
             reply.error(libc::ENOENT);
             return;
@@ -538,6 +569,10 @@ impl Filesystem for Sshfs {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        debug!(
+            "[setattr] start: ino={}, mode={:?}, size={:?}, atime={:?}, mtime={:?}",
+            ino, mode, size, atime, mtime
+        );
         let stat = ssh2::FileStat {
             size,
             uid: None,
@@ -582,6 +617,10 @@ impl Filesystem for Sshfs {
         flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
+        debug!(
+            "[rename] start: parent={}, name={:?}, newparent={}, newname={:?}, flags={}",
+            parent, name, newparent, newname, flags
+        );
         let Some(mut old_path) = self.inodes.get_path(parent) else {
             reply.error(libc::ENOENT);
             return;
