@@ -20,13 +20,13 @@ impl Inodes {
     pub(super) fn new() -> Self {
         Self {
             list: Mutex::new(BiHashMap::new()),
-            next_inode: AtomicU64::new(2),
+            next_inode: AtomicU64::new(1),
         }
     }
 
     /// pathで指定されたinodeを生成し、登録する。
     /// すでにpathの登録が存在する場合、追加はせず、登録済みのinodeを返す。
-    /// 初めて、この関数が呼ばれるときは、ファイルシステムにおけるルートであり、inode番号2が割り当てられる。
+    /// 初めて、この関数が呼ばれるときは、ファイルシステムにおけるルートであり、inode番号1が割り当てられる。
     pub(super) fn add<P: AsRef<Path>>(&mut self, path: P) -> u64 {
         let mut list_guard = self.list.lock().unwrap();
         // 注釈:このリストが毒化されたら、もはや、全システムにわたり、inode管理の正当性を保証できない。
@@ -94,13 +94,13 @@ mod inode_test {
     #[test]
     fn inode_add_test() {
         let mut inodes = Inodes::new();
-        assert_eq!(inodes.add(""), 2);
-        assert_eq!(inodes.add(Path::new("test")), 3);
-        assert_eq!(inodes.add(Path::new("")), 2);
-        assert_eq!(inodes.add(Path::new("test")), 3);
-        assert_eq!(inodes.add(Path::new("test3")), 4);
-        assert_eq!(inodes.add(Path::new("/test")), 5);
-        assert_eq!(inodes.add(Path::new("test/")), 3);
+        assert_eq!(inodes.add(""), 1);
+        assert_eq!(inodes.add(Path::new("test")), 2);
+        assert_eq!(inodes.add(Path::new("")), 1);
+        assert_eq!(inodes.add(Path::new("test")), 2);
+        assert_eq!(inodes.add(Path::new("test3")), 3);
+        assert_eq!(inodes.add(Path::new("/test")), 4);
+        assert_eq!(inodes.add(Path::new("test/")), 2);
     }
 
     fn make_inodes() -> Inodes {
@@ -115,19 +115,19 @@ mod inode_test {
     #[test]
     fn inodes_get_inode_test() {
         let inodes = make_inodes();
-        assert_eq!(inodes.get_inode(Path::new("")), Some(2));
+        assert_eq!(inodes.get_inode(Path::new("")), Some(1));
         assert_eq!(inodes.get_inode(Path::new("test4")), None);
         assert_eq!(inodes.get_inode(Path::new("/test")), None);
-        assert_eq!(inodes.get_inode(Path::new("test3")), Some(5));
+        assert_eq!(inodes.get_inode(Path::new("test3")), Some(4));
     }
 
     #[test]
     fn inodes_get_path_test() {
         let inodes = make_inodes();
-        assert_eq!(inodes.get_path(2), Some(Path::new("").into()));
-        assert_eq!(inodes.get_path(4), Some(Path::new("test2").into()));
-        assert_eq!(inodes.get_path(6), None);
-        assert_eq!(inodes.get_path(4), Some(Path::new("test2/").into()));
+        assert_eq!(inodes.get_path(1), Some(Path::new("").into()));
+        assert_eq!(inodes.get_path(3), Some(Path::new("test2").into()));
+        assert_eq!(inodes.get_path(5), None);
+        assert_eq!(inodes.get_path(3), Some(Path::new("test2/").into()));
     }
 
     #[test]

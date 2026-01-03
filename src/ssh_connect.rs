@@ -143,8 +143,8 @@ fn userauth(sess: &Session, username: &str, identity: &Option<PathBuf>) -> Resul
 /// agent認証
 fn user_auth_agent(sess: &Session, username: &str) -> Result<(), ssh2::Error> {
     let ret = sess.userauth_agent(username);
-    if ret.is_err() {
-        debug!("認証失敗(agent)->{:?}", ret.as_ref().unwrap_err());
+    if let Err(e) = &ret {
+        debug!("認証失敗(agent)->{:?}", e);
     };
     ret
 }
