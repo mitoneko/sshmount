@@ -32,6 +32,7 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
 }
 
 /// ホストのipアドレス解決
+const DEFAULT_PORT: u16 = 22;
 fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr> {
     let dns = host_params.host_name.as_deref().unwrap_or(&opt.remote.host);
     let addr = lookup_host(dns)
@@ -42,7 +43,10 @@ fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAd
         .first()
         .ok_or(anyhow!("Unable to obtain DNS address."))
         .inspect_err(|e| error!("get_address : {}", e))?;
-    Ok(std::net::SocketAddr::from((*addr, opt.port)))
+    Ok(std::net::SocketAddr::from((
+        *addr,
+        opt.port.unwrap_or(opt.remote.port.unwrap_or(DEFAULT_PORT)),
+    )))
 }
 
 /// ssh-configの取得と解析
