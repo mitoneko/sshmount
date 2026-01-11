@@ -1,4 +1,4 @@
-mod remote_host;
+pub mod remote_host;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;

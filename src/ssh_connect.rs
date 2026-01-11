@@ -1,12 +1,12 @@
 //! ssh接続関連関数モジュール
 
-use crate::cmdline_opt::Opt;
+use crate::cmdline_opt::{remote_host::HostInfo, Opt};
 use anyhow::{anyhow, Context, Result};
 use dialoguer::Password;
 use dns_lookup::lookup_host;
 use log::{debug, error};
 use ssh2::Session;
-use ssh2_config::{HostParams, ParseRule, SshConfig};
+use ssh2_config::{DefaultAlgorithms, HostParams, ParseRule, SshConfig};
 use std::{
     fs::File,
     io::BufReader,
@@ -17,8 +17,22 @@ use std::{
 
 /// セッションを生成する。
 pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
-    let host_params = get_ssh_config(&opt.config_file).query(&opt.remote.host);
-    let address = get_address(opt, &host_params).context("Failed to get host address")?;
+    let (address, host_params) = match opt.remote.host {
+        HostInfo::Name(ref name) => {
+            let host_params = get_ssh_config(&opt.config_file).query(name);
+            let address =
+                get_address(name, opt, &host_params).context("Failed to get host address")?;
+            (address, host_params)
+        }
+        HostInfo::Ip(ip) => {
+            let address = std::net::SocketAddr::from((
+                ip,
+                opt.port.unwrap_or(opt.remote.port.unwrap_or(DEFAULT_PORT)),
+            ));
+            let host_params = HostParams::new(&DefaultAlgorithms::default());
+            (address, host_params)
+        }
+    };
     let username = get_username(opt, &host_params).context("Failed to get user name.")?;
     debug!(
         "[main] 接続先情報-> ユーザー:\"{}\", ip address:{:?}",
@@ -33,8 +47,8 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
 
 /// ホストのipアドレス解決
 const DEFAULT_PORT: u16 = 22;
-fn get_address(opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr> {
-    let dns = host_params.host_name.as_deref().unwrap_or(&opt.remote.host);
+fn get_address(name: &str, opt: &Opt, host_params: &HostParams) -> Result<std::net::SocketAddr> {
+    let dns = host_params.host_name.as_deref().unwrap_or(name);
     let addr = lookup_host(dns)
         .inspect_err(|e| error!("get_address : Failed lookup_host[{}]", e))
         .context("Cannot find host to connect to.")?
