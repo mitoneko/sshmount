@@ -1,5 +1,6 @@
 //! コマンドラインオブションにおけるRemoteHost構造体
 
+use fluent_uri::{component::Host, Uri};
 use log::debug;
 use std::net::IpAddr;
 
@@ -27,14 +28,18 @@ impl RemoteName {
     /// remote引数の解析(URI形式の場合)
     fn parse_uri(s: &str) -> Result<Self, ErrorRemoteName> {
         // URIの解析
-        let uri = fluent_uri::Uri::parse(s).map_err(|_| ErrorRemoteName)?;
-        let info = uri.authority().ok_or(ErrorRemoteName)?;
+        let uri = Uri::parse(s)?;
+        let info = uri
+            .authority()
+            .ok_or(ErrorRemoteName::NotFoundHostInformationInURI)?;
         // ポート番号の取得
-        let port = info.port_to_u16().map_err(|_| ErrorRemoteName)?;
+        let port = info
+            .port_to_u16()
+            .map_err(|_| ErrorRemoteName::InvalidPortNo)?;
         // ホストアドレスの取得
         let host = match info.host_parsed() {
-            fluent_uri::component::Host::Ipv4(ip) => HostInfo::Ip(ip.into()),
-            fluent_uri::component::Host::Ipv6(ip) => HostInfo::Ip(ip.into()),
+            Host::Ipv4(ip) => HostInfo::Ip(ip.into()),
+            Host::Ipv6(ip) => HostInfo::Ip(ip.into()),
             _ => HostInfo::Name(info.host().to_string()),
         };
         // パス名の取得
@@ -45,7 +50,7 @@ impl RemoteName {
             Some(
                 path_str
                     .parse::<std::path::PathBuf>()
-                    .map_err(|_| ErrorRemoteName)?,
+                    .map_err(|_| ErrorRemoteName::InvalidPath)?,
             )
         };
         // ユーザー名の取得
@@ -82,10 +87,9 @@ impl RemoteName {
                     let (ip6_str, rest) = rest_str.split_once("]").unwrap();
                     host = Some(ip6_str);
                     rest_str = rest;
-                    (_, rest_str) = rest_str.split_once(":").ok_or(ErrorRemoteName)?;
-                // 後続の:がない。
+                    (_, rest_str) = rest_str.split_once(":").ok_or(ErrorRemoteName::NoColon)?;
                 } else {
-                    return Err(ErrorRemoteName); // 閉じカッコがない。
+                    return Err(ErrorRemoteName::MissingClosingParenthesisInIP6v);
                 }
             }
             Some(_) => {}
@@ -97,14 +101,13 @@ impl RemoteName {
             match rest_str.split_once(":") {
                 Some((h, r)) => {
                     if h.trim().is_empty() {
-                        // ホスト名が空では困る。
-                        return Err(ErrorRemoteName);
+                        return Err(ErrorRemoteName::NoHostName);
                     }
                     host = Some(h);
                     rest_str = r;
                 }
                 None => {
-                    return Err(ErrorRemoteName);
+                    return Err(ErrorRemoteName::NoColon);
                 }
             }
         }
@@ -124,7 +127,7 @@ impl RemoteName {
                 rest_str
                     .trim_end()
                     .parse::<std::path::PathBuf>()
-                    .map_err(|_| ErrorRemoteName)?,
+                    .map_err(|_| ErrorRemoteName::InvalidPath)?,
             )
         };
 
@@ -161,8 +164,23 @@ impl std::str::FromStr for RemoteName {
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
-#[error("The format of the host to connect to is \"[user@]host:[path]\" or \"scp://[user@]host[:port][/path]\".")]
-pub struct ErrorRemoteName;
+//#[error("The format of the host to connect to is \"[user@]host:[path]\" or \"scp://[user@]host[:port][/path]\".")]
+pub enum ErrorRemoteName {
+    #[error("URI parse error.")]
+    UriParse(#[from] fluent_uri::ParseError),
+    #[error("Host information not found at the specified URI.")]
+    NotFoundHostInformationInURI,
+    #[error("Invalid port number.")]
+    InvalidPortNo,
+    #[error("Invalid path name")]
+    InvalidPath,
+    #[error("The closing parenthesis is missing from IP6v.")]
+    MissingClosingParenthesisInIP6v,
+    #[error("In the host information, there is no subsequent\":\"")]
+    NoColon,
+    #[error("No hostname specified.")]
+    NoHostName,
+}
 
 #[cfg(test)]
 mod test {
@@ -233,15 +251,15 @@ mod test {
 
         let s = "reterminal.local";
         let r: Result<RemoteName, ErrorRemoteName> = s.parse();
-        assert_eq!(r, Err(ErrorRemoteName));
+        assert_eq!(r, Err(ErrorRemoteName::NoColon));
 
         let s = "mito@reterminal.local";
         let r: Result<RemoteName, ErrorRemoteName> = s.parse();
-        assert_eq!(r, Err(ErrorRemoteName));
+        assert_eq!(r, Err(ErrorRemoteName::NoColon));
 
         let s = " mito @: ";
         let r: Result<RemoteName, ErrorRemoteName> = s.parse();
-        assert_eq!(r, Err(ErrorRemoteName));
+        assert_eq!(r, Err(ErrorRemoteName::NoHostName));
     }
 
     #[test]
