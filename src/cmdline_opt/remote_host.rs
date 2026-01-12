@@ -158,7 +158,7 @@ pub enum ErrorRemoteName {
     InvalidPortNo,
     #[error("Invalid path name")]
     InvalidPath,
-    #[error("The closing bracket is missing from IP6v.")]
+    #[error("The closing bracket is missing from IPv6.")]
     MissingClosingBracketInIP6v,
     #[error("In the host information, there is no subsequent\":\"")]
     NoColon,
