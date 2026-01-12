@@ -160,7 +160,7 @@ pub enum ErrorRemoteName {
     InvalidPath,
     #[error("The closing bracket is missing from IPv6.")]
     MissingClosingBracketInIP6v,
-    #[error("In the host information, there is no subsequent\":\"")]
+    #[error("In the host information, there is no subsequent colon (:).")]
     NoColon,
     #[error("No hostname specified.")]
     NoHostName,
