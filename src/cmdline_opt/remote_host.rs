@@ -49,12 +49,13 @@ impl RemoteName {
         } else {
             Some(
                 path_str
+                    .trim()
                     .parse::<std::path::PathBuf>()
                     .map_err(|_| ErrorRemoteName::InvalidPath)?,
             )
         };
         // ユーザー名の取得
-        let user = info.userinfo().map(|s| s.as_str().to_string());
+        let user = info.userinfo().map(|s| s.as_str().trim().to_string());
 
         Ok(Self {
             user,
@@ -66,7 +67,7 @@ impl RemoteName {
 
     /// remote引数の解析(URI形式でない場合)
     fn parse_non_uri(s: &str) -> Result<Self, ErrorRemoteName> {
-        let mut rest_str = s;
+        let mut rest_str = s.trim();
         // ユーザー名の取得
         let user = match rest_str.split_once("@") {
             Some((u, r)) => {
@@ -76,56 +77,39 @@ impl RemoteName {
             None => None,
         };
         // ホストアドレスの取得
-        let mut host = None;
+        let host_str: &str;
         // IP6vの判定
-        let ip6_open = rest_str.trim_start().find("[");
-        let ip6_close = rest_str.find("]");
-        match ip6_open {
-            Some(0) => {
-                if ip6_close.is_some() {
-                    rest_str = rest_str.split_once("[").unwrap().1;
-                    let (ip6_str, rest) = rest_str.split_once("]").unwrap();
-                    host = Some(ip6_str);
-                    rest_str = rest;
-                    (_, rest_str) = rest_str.split_once(":").ok_or(ErrorRemoteName::NoColon)?;
-                } else {
-                    return Err(ErrorRemoteName::MissingClosingParenthesisInIP6v);
-                }
+        rest_str = rest_str.trim_start();
+        if rest_str.starts_with('[') {
+            let (ip6_str, rest) = match rest_str.split_once(']') {
+                Some((l, r)) => (l.trim_start_matches('['), r),
+                None => return Err(ErrorRemoteName::MissingClosingBracketInIP6v),
+            };
+            host_str = ip6_str.trim();
+            let (_, r) = rest.split_once(":").ok_or(ErrorRemoteName::NoColon)?;
+            rest_str = r;
+        } else {
+            let (h, r) = rest_str.split_once(':').ok_or(ErrorRemoteName::NoColon)?;
+            if h.trim().is_empty() {
+                return Err(ErrorRemoteName::NoHostName);
             }
-            Some(_) => {}
-            None => {}
+            host_str = h.trim();
+            rest_str = r;
         }
 
-        // hostがNoneなら、IP4vかホスト名
-        if host.is_none() {
-            match rest_str.split_once(":") {
-                Some((h, r)) => {
-                    if h.trim().is_empty() {
-                        return Err(ErrorRemoteName::NoHostName);
-                    }
-                    host = Some(h);
-                    rest_str = r;
-                }
-                None => {
-                    return Err(ErrorRemoteName::NoColon);
-                }
-            }
-        }
-
-        // この時点で、hostがNoneであることは有り得ない。
-        let try_ip = host.unwrap().parse::<IpAddr>();
+        let try_ip = host_str.parse::<IpAddr>();
         let host = match try_ip {
             Ok(addr) => HostInfo::Ip(addr),
-            Err(_) => HostInfo::Name(host.unwrap().to_string()),
+            Err(_) => HostInfo::Name(host_str.to_string()),
         };
 
         // パス名の取得
-        let path = if rest_str.trim_end().is_empty() {
+        rest_str = rest_str.trim();
+        let path = if rest_str.is_empty() {
             None
         } else {
             Some(
                 rest_str
-                    .trim_end()
                     .parse::<std::path::PathBuf>()
                     .map_err(|_| ErrorRemoteName::InvalidPath)?,
             )
@@ -174,8 +158,8 @@ pub enum ErrorRemoteName {
     InvalidPortNo,
     #[error("Invalid path name")]
     InvalidPath,
-    #[error("The closing parenthesis is missing from IP6v.")]
-    MissingClosingParenthesisInIP6v,
+    #[error("The closing bracket is missing from IP6v.")]
+    MissingClosingBracketInIP6v,
     #[error("In the host information, there is no subsequent\":\"")]
     NoColon,
     #[error("No hostname specified.")]
@@ -184,6 +168,8 @@ pub enum ErrorRemoteName {
 
 #[cfg(test)]
 mod test {
+    use fluent_uri::ParseErrorKind;
+
     use super::*;
 
     #[test]
@@ -304,5 +290,46 @@ mod test {
         };
         let r: RemoteName = s.parse().unwrap();
         assert_eq!(r, a);
+    }
+
+    #[test]
+    fn test_from_str_with_extra_space() {
+        let s = "name@192.168.0.1:  /test_path/path   ";
+        let a = RemoteName {
+            user: Some("name".to_string()),
+            host: HostInfo::Ip("192.168.0.1".parse().unwrap()),
+            port: None,
+            path: Some(std::path::PathBuf::from("/test_path/path")),
+        };
+        let r: RemoteName = s.parse().unwrap();
+        assert_eq!(r, a);
+
+        let s = "scp://[::1]:22/  /test";
+        let r: Result<RemoteName, ErrorRemoteName> = s.parse();
+        match r {
+            Ok(_) => {
+                unreachable!("この形式はエラーであるはず。");
+            }
+            Err(ErrorRemoteName::UriParse(e)) => {
+                assert_eq!(e.kind(), ParseErrorKind::UnexpectedChar);
+            }
+            Err(e) => {
+                unreachable!("何が起こった?({:?}", e);
+            }
+        }
+
+        let s = "scp:// name @192.168.0.1:22/test_path/path";
+        let r: Result<RemoteName, ErrorRemoteName> = s.parse();
+        match r {
+            Ok(_) => {
+                unreachable!("この形式はエラーであるはず。");
+            }
+            Err(ErrorRemoteName::UriParse(e)) => {
+                assert_eq!(e.kind(), ParseErrorKind::UnexpectedChar);
+            }
+            Err(e) => {
+                unreachable!("何が起こった?({:?}", e);
+            }
+        }
     }
 }
