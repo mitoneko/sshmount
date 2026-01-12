@@ -55,7 +55,14 @@ impl RemoteName {
             )
         };
         // ユーザー名の取得
-        let user = info.userinfo().map(|s| s.as_str().trim().to_string());
+        let user = info.userinfo().and_then(|s| {
+            let trimed = s.as_str().trim();
+            if trimed.is_empty() {
+                None
+            } else {
+                Some(trimed.to_string())
+            }
+        });
 
         Ok(Self {
             user,
@@ -158,8 +165,8 @@ pub enum ErrorRemoteName {
     InvalidPortNo,
     #[error("Invalid path name")]
     InvalidPath,
-    #[error("The closing bracket is missing from IP6v.")]
-    MissingClosingBracketInIP6v,
+    #[error("The closing bracket is missing from IPv6.")]
+    MissingClosingBracketInIPv6,
     #[error("In the host information, there is no subsequent\":\"")]
     NoColon,
     #[error("No hostname specified.")]
@@ -328,7 +335,7 @@ mod test {
                 assert_eq!(e.kind(), ParseErrorKind::UnexpectedChar);
             }
             Err(e) => {
-                unreachable!("何が起こった?({:?}", e);
+                unreachable!("何が起こった?({:?})", e);
             }
         }
     }
