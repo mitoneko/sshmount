@@ -85,12 +85,12 @@ impl RemoteName {
         };
         // ホストアドレスの取得
         let host_str: &str;
-        // IP6vの判定
+        // IPv6の判定
         rest_str = rest_str.trim_start();
         if rest_str.starts_with('[') {
             let (ip6_str, rest) = match rest_str.split_once(']') {
                 Some((l, r)) => (l.trim_start_matches('['), r),
-                None => return Err(ErrorRemoteName::MissingClosingBracketInIP6v),
+                None => return Err(ErrorRemoteName::MissingClosingBracketInIPv6),
             };
             host_str = ip6_str.trim();
             let (_, r) = rest.split_once(":").ok_or(ErrorRemoteName::NoColon)?;
@@ -167,7 +167,7 @@ pub enum ErrorRemoteName {
     InvalidPath,
     #[error("The closing bracket is missing from IPv6.")]
     MissingClosingBracketInIPv6,
-    #[error("In the host information, there is no subsequent\":\"")]
+    #[error("In the host information, there is no subsequent colon (:).")]
     NoColon,
     #[error("No hostname specified.")]
     NoHostName,
