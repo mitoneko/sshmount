@@ -78,7 +78,7 @@ impl RemoteName {
         };
         // ホストアドレスの取得
         let host_str: &str;
-        // IP6vの判定
+        // IPv6の判定
         rest_str = rest_str.trim_start();
         if rest_str.starts_with('[') {
             let (ip6_str, rest) = match rest_str.split_once(']') {
