@@ -152,21 +152,20 @@ fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Result<Option<Vec<P
                 let paths = n
                     .iter()
                     .map(expand_tilde_in_path)
-                    .filter(|p| {
-                        match std::fs::File::open(p) {
-                           Ok(_) => true,
-                           Err(e)  => {
-                               warn!(
+                    .filter(|p| match std::fs::File::open(p) {
+                        Ok(_) => true,
+                        Err(e) => {
+                            warn!(
                                 "IdentityFile '{:?}' from ssh-config is not accessible. skipping. (io error: {})",
                                 p, e
-                                );
-                                false
-                           }
+                            );
+                            false
                         }
                     })
                     .collect::<Vec<_>>();
                 if paths.is_empty() {
-                    Err(anyhow!( "No usable identity files found for host {:?} (checked {} entries from ssh-config).",
+                    Err(anyhow!(
+                        "No usable identity files found for host {:?} (checked {} entries from ssh-config).",
                         host_params.host_name.as_deref().unwrap_or("<unknown>"),
                         n.len()
                     ))
