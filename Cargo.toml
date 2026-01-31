@@ -1,6 +1,6 @@
 [package]
 name = "sshmount"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["mito"]
 description = "Mount the directory to which the ssh connection is made."
@@ -24,6 +24,7 @@ fuser = "0.16"
 home = "0.5.4"
 libc = "0.2.139"
 log = "0.4.17"
+shellexpand = "3.1.1"
 ssh2 = "0.9.3"
 ssh2-config = "0.6.0"
 thiserror = "2.0"

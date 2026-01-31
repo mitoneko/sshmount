@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use remote_host::RemoteName;
 
 /// コマンドラインオプション
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(author, version, about)]
 pub struct Opt {
     /// Distination [user@]host:[path] or scp://[user@]host[:port][/path]
