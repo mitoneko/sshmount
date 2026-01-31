@@ -153,7 +153,6 @@ fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Result<Option<Vec<P
                     .iter()
                     .map(expand_tilde_in_path)
                     .filter(|p| {
-                        eprintln!("Checking identity file: {:?}", p);
                         match std::fs::File::open(p) {
                            Ok(_) => true,
                            Err(e)  => {
