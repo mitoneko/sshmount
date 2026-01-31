@@ -26,11 +26,10 @@ pub enum HostInfo {
 
 impl std::fmt::Display for HostInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            HostInfo::Name(name) => name.clone(),
-            HostInfo::Ip(ip) => ip.to_string(),
-        };
-        s.fmt(f)
+        match self {
+            HostInfo::Name(name) => write!(f, "{}", name),
+            HostInfo::Ip(ip) => write!(f, "{}", ip),
+        }
     }
 }
 
