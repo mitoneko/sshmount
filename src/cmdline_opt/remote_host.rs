@@ -24,6 +24,16 @@ pub enum HostInfo {
     Ip(IpAddr),
 }
 
+impl std::fmt::Display for HostInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            HostInfo::Name(name) => name.clone(),
+            HostInfo::Ip(ip) => ip.to_string(),
+        };
+        s.fmt(f)
+    }
+}
+
 impl RemoteName {
     /// remote引数の解析(URI形式の場合)
     fn parse_uri(s: &str) -> Result<Self, ErrorRemoteName> {
