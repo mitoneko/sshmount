@@ -29,8 +29,8 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
         .user
         .as_ref()
         .ok_or(anyhow!("User name is not specified."))?;
-    debug!(
-        "[main] 接続先情報-> ユーザー:\"{}\", ip address:{:?}",
+    info!(
+        "[main] info connection-> user name:\"{}\", ip address:{:?}",
         &user_name, &addresses
     );
     let identity_file = &host_params.identity_file;
@@ -46,7 +46,6 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
 /// ホスト情報は、コマンドラインオプション>configファイル>remote_host引数の順で上書きする。
 fn make_host_params(opt: &Opt) -> Result<HostParams> {
     let mut host_params = get_ssh_config(&opt.config_file).query(opt.remote.host.to_string());
-    //eprintln!("host_params: {:#?}", host_params);
     // ホスト名の解決
     if host_params.host_name.is_none() {
         host_params.host_name = Some(opt.remote.host.to_string());
@@ -96,7 +95,7 @@ fn get_ssh_config(file_opt: &Option<PathBuf>) -> SshConfig {
             SshConfig::default()
                 .parse(&mut f, ParseRule::ALLOW_UNKNOWN_FIELDS)
                 .unwrap_or_else(|e| {
-                    eprintln!("警告:configファイル内にエラー -- {e}");
+                    eprintln!("Warning: Failed to parse ssh_config file. Using default settings. (error: {})", e);
                     SshConfig::default()
                 })
         })
@@ -152,12 +151,16 @@ fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Result<Option<Vec<P
                 let paths = n
                     .iter()
                     .map(expand_tilde_in_path)
-                    .filter(|p| match std::fs::File::open(p) {
+                    .filter(|p|  match std::fs::File::open(p) {
                         Ok(_) => true,
                         Err(e) => {
                             warn!(
                                 "IdentityFile '{:?}' from ssh-config is not accessible. skipping. (io error: {})",
                                 p, e
+                            );
+                            eprintln!(
+                                "Warning: IdentityFile '{:?}' from ssh-config is not accessible. skipping.",
+                                p
                             );
                             false
                         }
@@ -326,8 +329,6 @@ mod test {
     #[test]
     #[ignore]
     fn test_make_host_params_multi_identify() {
-        return; // 本当は、通るはずだけど、query()の結果に複数のidentityfileが入らないので、一旦スキップ
-        #[allow(unreachable_code)]
         let config_file_path = test_config_file_path();
         let opt = make_dummy_opt(format!(
             "sshmount -F {} multi_identity:/remote/path mnt",
@@ -337,7 +338,7 @@ mod test {
         assert_eq!(host_param.host_name.unwrap(), "multi.example.com");
         assert_eq!(
             host_param.identity_file.as_ref().unwrap()[0],
-            PathBuf::from("/home/mito/develop/rust/sshmount/test_data/dummy_rsa")
+            PathBuf::from("/home/mito/develop/rust/sshmount/test_data/dummy1_rsa")
         );
         assert_eq!(
             host_param.identity_file.as_ref().unwrap()[1],
