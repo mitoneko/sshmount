@@ -1,7 +1,7 @@
 //! FUSEパラメータ関係　ユーティリティ
 
 use crate::cmdline_opt::Opt;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use ssh2::Session;
 use std::env::current_dir;
 use std::{
@@ -43,7 +43,7 @@ pub fn make_remote_path(opt: &Opt, session: &Session) -> Result<PathBuf> {
         .context("Connection to SFTP failed when checking for existence of a path.")?;
     let file_stat = sftp
         .stat(&path)
-        .with_context(|| format!("Cannot find path to connect to. path={:?}", &path))?;
+        .with_context(|| format!("Cannot find path to connect to. path={:?}", path))?;
     ensure!(
         file_stat.is_dir(),
         "The path to connect to is not a directory."

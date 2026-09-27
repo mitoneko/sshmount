@@ -1,6 +1,6 @@
 //! コマンドラインオブションにおけるRemoteHost構造体
 
-use fluent_uri::{component::Host, Uri};
+use fluent_uri::{Uri, component::Host};
 use log::debug;
 use std::net::IpAddr;
 
@@ -144,7 +144,7 @@ impl std::fmt::Display for RemoteName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = format!(
             "<{:?}><{:?}><{:?}><{:?}>",
-            &self.user, &self.host, &self.port, &self.path
+            self.user, self.host, self.port, self.path
         );
         s.fmt(f)
     }

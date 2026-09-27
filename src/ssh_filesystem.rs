@@ -39,7 +39,7 @@ impl Sshfs {
             .context("Failed to create sftp from session.(Sshfs::new)")?;
         debug!(
             "[Sshfs::new] connect path: <{:?}>, inodes=<{:?}>",
-            &top_path, &inodes
+            top_path, inodes
         );
         Ok(Self {
             _session: session,
@@ -126,7 +126,7 @@ impl Filesystem for Sshfs {
                 reply.attr(&Duration::from_secs(1), &attr);
             }
             Err(e) => {
-                warn!("[getattr] getattr_from_ssh2エラー: {:?}", &e);
+                warn!("[getattr] getattr_from_ssh2エラー: {:?}", e);
                 reply.error(e.0)
             }
         };
@@ -157,8 +157,7 @@ impl Filesystem for Sshfs {
                 }; // "." ".."の解決用。 attr ディレクトリであることのみを示す。
                 dir.insert(0, (Path::new("..").into(), cur_file_attr.clone()));
                 dir.insert(0, (Path::new(".").into(), cur_file_attr));
-                let mut i = offset + 1;
-                for f in dir.iter().skip(offset as usize) {
+                for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
                     let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
                         1
                     } else {
@@ -183,7 +182,6 @@ impl Filesystem for Sshfs {
                     if reply.add(ino, i, filetype, name) {
                         break;
                     }
-                    i += 1;
                 }
                 reply.ok();
             }
@@ -244,8 +242,8 @@ impl Filesystem for Sshfs {
 
         debug!(
             "[open] filename='{:?}', openflag = {:?}, bit = {:x}",
-            &file_name,
-            &flags_ssh2,
+            file_name,
+            flags_ssh2,
             flags_ssh2.bits()
         );
         match self
@@ -259,9 +257,9 @@ impl Filesystem for Sshfs {
             Err(e) => {
                 log::error!(
                     "file-open error: filename='{:?}', mode={:?}, err={}",
-                    &file_name,
-                    &flags_ssh2,
-                    &e
+                    file_name,
+                    flags_ssh2,
+                    e
                 );
                 reply.error(Error::from(e).0);
             }
