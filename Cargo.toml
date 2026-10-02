@@ -20,7 +20,7 @@ dialoguer = "0.12.0"
 dns-lookup = "4.0.1"
 env_logger = "0.11.11"
 fluent-uri = { version = "0.4.1", features = ["net"] }
-fuser = "0.16"
+fuser = "0.18"
 home = "0.5.12"
 libc = "0.2.189"
 log = "0.4.34"
@@ -31,4 +31,8 @@ thiserror = "2.0"
 users = "0.11.0"
 
 [profile.release]
-#debug = true
+codegen-units = 1
+opt-level = "s"
+lto = "thin"
+panic = "abort"
+strip = "symbols"

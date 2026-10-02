@@ -1,19 +1,25 @@
 mod bi_hash_map;
 mod file_handle;
 mod inode;
+mod mutex_lock_ext;
 
 use file_handle::Fhandles;
 use inode::Inodes;
+use mutex_lock_ext::MutexLockExt;
 
 use anyhow::Context;
-use fuser::{FileAttr, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request};
-use libc::ENOENT;
+use fuser::{
+    BsdFileFlags, Errno, FileAttr, FileHandle, Filesystem, FopenFlags, Generation, INodeNo,
+    LockOwner, OpenFlags as OpenFlagsFuser, RenameFlags, ReplyAttr, ReplyData, ReplyDirectory,
+    ReplyEntry, Request, WriteFlags,
+};
 use log::{debug, error, warn};
-use ssh2::{ErrorCode, OpenFlags, OpenType, Session, Sftp};
+use ssh2::{ErrorCode, OpenFlags as OpenFlagsSsh2, OpenType, Session, Sftp};
 use std::{
     ffi::OsStr,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,7 +27,7 @@ use std::{
 pub struct Sshfs {
     _session: Session,
     sftp: Sftp,
-    inodes: Inodes,
+    inodes: Mutex<Inodes>,
     fhandls: Fhandles,
     _top_path: PathBuf,
 }
@@ -31,6 +37,7 @@ impl Sshfs {
         let mut inodes = Inodes::new();
         let top_path: PathBuf = path.as_ref().into();
         inodes.add(&top_path);
+        let inodes = Mutex::new(inodes);
         let sftp = session
             .sftp()
             .inspect_err(|_| {
@@ -52,10 +59,13 @@ impl Sshfs {
 
     /// ssh2経由でファイルのステータスを取得する。
     /// 副作用:取得に成功した場合、inodesにパスを登録する。
-    fn getattr_from_ssh2(&mut self, path: &Path, uid: u32, gid: u32) -> Result<FileAttr, Error> {
+    fn getattr_from_ssh2(&self, path: &Path, uid: u32, gid: u32) -> Result<FileAttr, Error> {
         let attr_ssh2 = self.sftp.lstat(path)?;
         let kind = Self::conv_file_kind_ssh2fuser(&attr_ssh2.file_type())?;
-        let ino = self.inodes.add(path);
+        let ino = self
+            .inodes
+            .lock_or_panic("get_attr_from_ssh2", "inodes")
+            .add(path);
         Ok(FileAttr {
             ino,
             size: attr_ssh2.size.unwrap_or(0),
@@ -84,7 +94,7 @@ impl Sshfs {
             ssh2::FileType::RegularFile => Ok(fuser::FileType::RegularFile),
             ssh2::FileType::Symlink => Ok(fuser::FileType::Symlink),
             ssh2::FileType::Socket => Ok(fuser::FileType::Socket),
-            ssh2::FileType::Other(_) => Err(Error(libc::EBADF)),
+            ssh2::FileType::Other(_) => Err(Error(Errno::EBADF)),
         }
     }
 
@@ -97,27 +107,31 @@ impl Sshfs {
 }
 
 impl Filesystem for Sshfs {
-    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         debug!("[lookup] start: parent={}, name={:?}", parent, name);
-        let Some(mut path) = self.inodes.get_path(parent) else {
-            debug!("[lookup] 親ディレクトリの検索に失敗 inode={}", parent);
-            reply.error(ENOENT);
+        let Some(mut path) = self
+            .inodes
+            .lock_or_panic("lookup", "inodes")
+            .get_path(parent)
+        else {
+            error!("[lookup] 親ディレクトリの検索に失敗 inode={}", parent);
+            reply.error(Errno::ENOENT);
             return;
         };
         path.push(Path::new(name));
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
-            Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, 0),
+            Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
             Err(e) => {
-                reply.error(e.0);
+                reply.error(e.into());
             }
         };
     }
 
-    fn getattr(&mut self, req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+    fn getattr(&self, req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         debug!("[getattr] start: ino={}", ino);
-        let Some(path) = self.inodes.get_path(ino) else {
-            debug!("[getattr] path取得失敗: inode={}", ino);
-            reply.error(ENOENT);
+        let Some(path) = self.inodes.lock_or_panic("getattr", "inodes").get_path(ino) else {
+            error!("[getattr] path取得失敗: inode={}", ino);
+            reply.error(Errno::ENOENT);
             return;
         };
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
@@ -127,22 +141,22 @@ impl Filesystem for Sshfs {
             }
             Err(e) => {
                 warn!("[getattr] getattr_from_ssh2エラー: {:?}", e);
-                reply.error(e.0)
+                reply.error(e.into())
             }
         };
     }
 
     fn readdir(
-        &mut self,
+        &self,
         _req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
         debug!("[readdir] start: ino={}, offset={}", ino, offset);
-        let Some(path) = self.inodes.get_path(ino) else {
-            reply.error(libc::ENOENT);
+        let Some(path) = self.inodes.lock_or_panic("readdir", "inodes").get_path(ino) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         match self.sftp.readdir(&path) {
@@ -159,9 +173,9 @@ impl Filesystem for Sshfs {
                 dir.insert(0, (Path::new(".").into(), cur_file_attr));
                 for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
                     let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
-                        1
+                        INodeNo(1)
                     } else {
-                        self.inodes.add(&f.0)
+                        self.inodes.lock_or_panic("readdir", "inodes").add(&f.0)
                     };
                     let name = match f.0.file_name() {
                         Some(n) => n,
@@ -175,7 +189,7 @@ impl Filesystem for Sshfs {
                                 "[readdir]ファイルタイプ解析失敗: inode={}, name={:?}",
                                 ino, name
                             );
-                            reply.error(e.0);
+                            reply.error(e.into());
                             return;
                         }
                     };
@@ -187,16 +201,20 @@ impl Filesystem for Sshfs {
             }
             Err(e) => {
                 warn!("[readdir]ssh2::readdir内でエラー発生-- {:?}", e);
-                reply.error(Error::from(e).0);
+                reply.error(Error::from(e).into());
             }
         };
     }
 
-    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
+    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
         debug!("[readlink] start: ino={}", ino);
-        let Some(path) = self.inodes.get_path(ino) else {
+        let Some(path) = self
+            .inodes
+            .lock_or_panic("readlink", "inodes")
+            .get_path(ino)
+        else {
             error!("[readlink] 親ディレクトリの検索に失敗 {ino}");
-            reply.error(libc::ENOENT);
+            reply.error(Errno::ENOENT);
             return;
         };
         match self.sftp.readlink(&path) {
@@ -206,38 +224,38 @@ impl Filesystem for Sshfs {
             }
             Err(e) => {
                 //debug!("[readlink] ssh2::readlink error => {e:?}");
-                reply.error(Error::from(e).0);
+                reply.error(Error::from(e).into());
             }
         }
     }
 
-    fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: fuser::ReplyOpen) {
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlagsFuser, reply: fuser::ReplyOpen) {
         debug!("[open] start: ino={}, flags={:x}", ino, flags);
-        let Some(file_name) = self.inodes.get_path(ino) else {
-            reply.error(libc::ENOENT);
+        let Some(file_name) = self.inodes.lock_or_panic("open", "inodes").get_path(ino) else {
+            reply.error(Errno::ENOENT);
             return;
         };
 
-        let mut flags_ssh2 = OpenFlags::empty();
-        if flags & libc::O_WRONLY != 0 {
-            flags_ssh2.insert(OpenFlags::WRITE);
-        } else if flags & libc::O_RDWR != 0 {
-            flags_ssh2.insert(OpenFlags::READ);
-            flags_ssh2.insert(OpenFlags::WRITE);
+        let mut flags_ssh2 = OpenFlagsSsh2::empty();
+        if flags.0 & libc::O_WRONLY != 0 {
+            flags_ssh2.insert(OpenFlagsSsh2::WRITE);
+        } else if flags.0 & libc::O_RDWR != 0 {
+            flags_ssh2.insert(OpenFlagsSsh2::READ);
+            flags_ssh2.insert(OpenFlagsSsh2::WRITE);
         } else {
-            flags_ssh2.insert(OpenFlags::READ);
+            flags_ssh2.insert(OpenFlagsSsh2::READ);
         }
-        if flags & libc::O_APPEND != 0 {
-            flags_ssh2.insert(OpenFlags::APPEND);
+        if flags.0 & libc::O_APPEND != 0 {
+            flags_ssh2.insert(OpenFlagsSsh2::APPEND);
         }
-        if flags & libc::O_CREAT != 0 {
-            flags_ssh2.insert(OpenFlags::CREATE);
+        if flags.0 & libc::O_CREAT != 0 {
+            flags_ssh2.insert(OpenFlagsSsh2::CREATE);
         }
-        if flags & libc::O_TRUNC != 0 {
-            flags_ssh2.insert(OpenFlags::TRUNCATE);
+        if flags.0 & libc::O_TRUNC != 0 {
+            flags_ssh2.insert(OpenFlagsSsh2::TRUNCATE);
         }
-        if flags & libc::O_EXCL != 0 {
-            flags_ssh2.insert(OpenFlags::EXCLUSIVE);
+        if flags.0 & libc::O_EXCL != 0 {
+            flags_ssh2.insert(OpenFlagsSsh2::EXCLUSIVE);
         }
 
         debug!(
@@ -251,8 +269,8 @@ impl Filesystem for Sshfs {
             .open_mode(&file_name, flags_ssh2, 0o777, ssh2::OpenType::File)
         {
             Ok(file) => {
-                let fh = self.fhandls.add_file(file);
-                reply.opened(fh, flags as u32);
+                let fh = FileHandle(self.fhandls.add_file(file));
+                reply.opened(fh, FopenFlags::empty());
             }
             Err(e) => {
                 log::error!(
@@ -261,50 +279,46 @@ impl Filesystem for Sshfs {
                     flags_ssh2,
                     e
                 );
-                reply.error(Error::from(e).0);
+                reply.error(Error::from(e).into());
             }
         }
     }
 
     fn release(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlagsFuser,
+        _lock_owner: Option<LockOwner>,
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
         debug!("[release] start: fh={}", fh);
-        self.fhandls.del_file(fh);
+        self.fhandls.del_file(fh.0);
         reply.ok();
     }
 
     fn read(
-        &mut self,
+        &self,
         _req: &Request,
-        _ino: u64,
-        fh: u64,
-        offset: i64,
+        _ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: OpenFlagsFuser,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
         debug!("[read] start: fh={}, offset={}, size={}", fh, offset, size);
-        let Some(file_mutex) = self.fhandls.get_file(fh) else {
-            reply.error(libc::EBADF);
+        let Some(file_mutex) = self.fhandls.get_file(fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
-        let mut file = file_mutex.lock().unwrap();
-        // 注釈:このデータの出所であるFhandles構造体内のデータに毒化があるということは、
-        // システム全域の他のファイルハンドルの正当性も保証できないことを意味する。
-        // ファイル操作を失敗させることより、システム全体を落とすことが正しい選択と思われる。
-        // よって、lock().unwrap()とする。write()関数他においても同様。
+        let mut file = file_mutex.lock_or_panic("read", "file handle");
 
-        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
-            reply.error(Error::from(e).0);
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)) {
+            reply.error(Error::from(e).into());
             return;
         }
         let mut buff = vec![0; size as usize];
@@ -318,7 +332,7 @@ impl Filesystem for Sshfs {
                     read_size += s;
                 }
                 Err(e) => {
-                    reply.error(Error::from(e).0);
+                    reply.error(Error::from(e).into());
                     return;
                 }
             }
@@ -328,15 +342,15 @@ impl Filesystem for Sshfs {
     }
 
     fn write(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
         data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _write_flags: WriteFlags,
+        _flags: OpenFlagsFuser,
+        _lock_owner: Option<LockOwner>,
         reply: fuser::ReplyWrite,
     ) {
         debug!(
@@ -345,14 +359,14 @@ impl Filesystem for Sshfs {
             offset,
             data.len()
         );
-        let Some(file_mutex) = self.fhandls.get_file(fh) else {
-            reply.error(libc::EBADF);
+        let Some(file_mutex) = self.fhandls.get_file(fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
-        let file = &mut file_mutex.lock().unwrap();
+        let file = &mut file_mutex.lock_or_panic("write", "file handle");
 
-        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset as u64)) {
-            reply.error(Error::from(e).0);
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)) {
+            reply.error(Error::from(e).into());
             return;
         }
         let mut buf = data;
@@ -360,7 +374,7 @@ impl Filesystem for Sshfs {
             let cnt = match file.write(buf) {
                 Ok(cnt) => cnt,
                 Err(e) => {
-                    reply.error(Error::from(e).0);
+                    reply.error(Error::from(e).into());
                     return;
                 }
             };
@@ -370,10 +384,10 @@ impl Filesystem for Sshfs {
     }
 
     fn lseek(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        fh: u64,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
         offset: i64,
         whence: i32,
         reply: fuser::ReplyLseek,
@@ -387,26 +401,26 @@ impl Filesystem for Sshfs {
                 if offset >= 0 {
                     SeekFrom::Start(offset as u64)
                 } else {
-                    reply.error(libc::EINVAL);
+                    reply.error(Errno::EINVAL);
                     return;
                 }
             }
             libc::SEEK_CUR => SeekFrom::Current(offset),
             libc::SEEK_END => SeekFrom::End(offset),
             _ => {
-                reply.error(libc::EINVAL);
+                reply.error(Errno::EINVAL);
                 return;
             }
         };
-        let Some(file_mutex) = self.fhandls.get_file(fh) else {
-            reply.error(libc::EBADF);
+        let Some(file_mutex) = self.fhandls.get_file(fh.0) else {
+            reply.error(Errno::EBADF);
             return;
         };
-        let file = &mut file_mutex.lock().unwrap();
+        let file = &mut file_mutex.lock_or_panic("lseek", "file handle");
         let pos = match file.seek(seek_from) {
             Ok(p) => p,
             Err(e) => {
-                reply.error(Error::from(e).0);
+                reply.error(Error::from(e).into());
                 return;
             }
         };
@@ -414,9 +428,9 @@ impl Filesystem for Sshfs {
     }
 
     fn mknod(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         umask: u32,
@@ -428,52 +442,64 @@ impl Filesystem for Sshfs {
             parent, name, mode, umask
         );
         if mode & libc::S_IFMT != libc::S_IFREG {
-            reply.error(libc::EPERM);
+            reply.error(Errno::EPERM);
             return;
         }
         let mode = mode & (!umask | libc::S_IFMT);
-        let Some(mut new_name) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut new_name) = self
+            .inodes
+            .lock_or_panic("mknod", "inodes")
+            .get_path(parent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         new_name.push(name);
-        if let Err(e) =
-            self.sftp
-                .open_mode(&new_name, OpenFlags::CREATE, mode as i32, OpenType::File)
-        {
-            reply.error(Error::from(e).0);
+        if let Err(e) = self.sftp.open_mode(
+            &new_name,
+            OpenFlagsSsh2::CREATE,
+            mode as i32,
+            OpenType::File,
+        ) {
+            reply.error(Error::from(e).into());
             return;
         }
         let new_attr = match self.getattr_from_ssh2(&new_name, req.uid(), req.gid()) {
             Ok(a) => a,
             Err(e) => {
-                reply.error(e.0);
+                reply.error(e.into());
                 return;
             }
         };
-        reply.entry(&Duration::from_secs(1), &new_attr, 0);
+        reply.entry(&Duration::from_secs(1), &new_attr, Generation(0));
     }
 
-    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("[unlink] start: parent={}, name={:?}", parent, name);
-        let Some(mut path) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut path) = self
+            .inodes
+            .lock_or_panic("unlink", "inodes")
+            .get_path(parent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         path.push(name);
         match self.sftp.unlink(&path) {
             Ok(_) => {
-                self.inodes.del_inode_with_path(&path);
+                self.inodes
+                    .lock_or_panic("unlink", "inodes")
+                    .del_inode_with_path(&path);
                 reply.ok();
             }
-            Err(e) => reply.error(Error::from(e).0),
+            Err(e) => reply.error(Error::from(e).into()),
         }
     }
 
     fn mkdir(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         umask: u32,
@@ -483,8 +509,12 @@ impl Filesystem for Sshfs {
             "[mkdir] start: parent={}, name={:?}, mode={:o}, umask={:o}",
             parent, name, mode, umask
         );
-        let Some(mut path) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut path) = self
+            .inodes
+            .lock_or_panic("mkdir", "inodes")
+            .get_path(parent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         path.push(name);
@@ -493,40 +523,46 @@ impl Filesystem for Sshfs {
 
         match self.sftp.mkdir(&path, mode) {
             Ok(_) => match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
-                Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, 0),
-                Err(e) => reply.error(e.0),
+                Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+                Err(e) => reply.error(e.into()),
             },
-            Err(e) => reply.error(Error::from(e).0),
+            Err(e) => reply.error(Error::from(e).into()),
         }
     }
 
-    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("[rmdir] start: parent={}, name={:?}", parent, name);
-        let Some(mut path) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut path) = self
+            .inodes
+            .lock_or_panic("mkdir", "inodes")
+            .get_path(parent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         path.push(name);
         match self.sftp.rmdir(&path) {
             Ok(_) => {
-                self.inodes.del_inode_with_path(&path);
+                self.inodes
+                    .lock_or_panic("mkdir", "inodes")
+                    .del_inode_with_path(&path);
                 reply.ok()
             }
             Err(e) => {
                 if e.code() == ErrorCode::Session(-31) {
                     // ssh2ライブラリの返すエラーが妙。置換しておく。
-                    reply.error(libc::ENOTEMPTY);
+                    reply.error(Errno::ENOTEMPTY);
                 } else {
-                    reply.error(Error::from(e).0)
+                    reply.error(Error::from(e).into())
                 }
             }
         }
     }
 
     fn symlink(
-        &mut self,
-        req: &Request<'_>,
-        parent: u64,
+        &self,
+        req: &Request,
+        parent: INodeNo,
         name: &OsStr,
         link: &Path,
         reply: ReplyEntry,
@@ -535,24 +571,28 @@ impl Filesystem for Sshfs {
             "[symlink] start: parent={}, name={:?}, link={:?}",
             parent, name, link
         );
-        let Some(mut target) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut target) = self
+            .inodes
+            .lock_or_panic("symlink", "inodes")
+            .get_path(parent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         target.push(name);
         match self.sftp.symlink(link, &target) {
             Ok(_) => match self.getattr_from_ssh2(&target, req.uid(), req.gid()) {
-                Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, 0),
-                Err(e) => reply.error(e.0),
+                Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+                Err(e) => reply.error(e.into()),
             },
-            Err(e) => reply.error(Error::from(e).0),
+            Err(e) => reply.error(Error::from(e).into()),
         }
     }
 
     fn setattr(
-        &mut self,
-        req: &Request<'_>,
-        ino: u64,
+        &self,
+        req: &Request,
+        ino: INodeNo,
         mode: Option<u32>,
         _uid: Option<u32>,
         _gid: Option<u32>,
@@ -560,11 +600,11 @@ impl Filesystem for Sshfs {
         atime: Option<fuser::TimeOrNow>,
         mtime: Option<fuser::TimeOrNow>,
         _ctime: Option<std::time::SystemTime>,
-        _fh: Option<u64>,
+        _fh: Option<FileHandle>,
         _crtime: Option<std::time::SystemTime>,
         _chgtime: Option<std::time::SystemTime>,
         _bkuptime: Option<std::time::SystemTime>,
-        _flags: Option<u32>,
+        _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
         debug!(
@@ -589,8 +629,8 @@ impl Filesystem for Sshfs {
                     .as_secs()
             }),
         };
-        let Some(filename) = self.inodes.get_path(ino) else {
-            reply.error(ENOENT);
+        let Some(filename) = self.inodes.lock_or_panic("setattr", "inodes").get_path(ino) else {
+            reply.error(Errno::ENOENT);
             return;
         };
         match self.sftp.setstat(&filename, stat) {
@@ -601,98 +641,122 @@ impl Filesystem for Sshfs {
                     Err(e) => reply.error(e.0),
                 }
             }
-            Err(e) => reply.error(Error::from(e).0),
+            Err(e) => reply.error(Error::from(e).into()),
         }
     }
 
     fn rename(
-        &mut self,
-        _req: &Request<'_>,
-        parent: u64,
+        &self,
+        _req: &Request,
+        parent: INodeNo,
         name: &OsStr,
-        newparent: u64,
+        newparent: INodeNo,
         newname: &OsStr,
-        flags: u32,
+        flags: RenameFlags,
         reply: fuser::ReplyEmpty,
     ) {
         debug!(
             "[rename] start: parent={}, name={:?}, newparent={}, newname={:?}, flags={}",
             parent, name, newparent, newname, flags
         );
-        let Some(mut old_path) = self.inodes.get_path(parent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut old_path) = self
+            .inodes
+            .lock_or_panic("rename", "inodes")
+            .get_path(parent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         old_path.push(name);
 
-        let Some(mut new_path) = self.inodes.get_path(newparent) else {
-            reply.error(libc::ENOENT);
+        let Some(mut new_path) = self
+            .inodes
+            .lock_or_panic("rename", "inodes")
+            .get_path(newparent)
+        else {
+            reply.error(Errno::ENOENT);
             return;
         };
         new_path.push(newname);
 
         let mut rename_flag = ssh2::RenameFlags::NATIVE;
-        if flags & libc::RENAME_EXCHANGE != 0 {
+        if flags.contains(RenameFlags::RENAME_EXCHANGE) {
             rename_flag.insert(ssh2::RenameFlags::ATOMIC);
         }
-        if flags & libc::RENAME_NOREPLACE == 0 {
+        if flags.contains(RenameFlags::RENAME_NOREPLACE) {
             // renameのOVERWRITEが効いてない。手動で消す。
             if let Ok(stat) = self.sftp.lstat(&new_path) {
                 if stat.is_dir() {
                     if let Err(e) = self.sftp.rmdir(&new_path) {
-                        reply.error(Error::from(e).0);
+                        reply.error(Error::from(e).into());
                         return;
                     }
                 } else if let Err(e) = self.sftp.unlink(&new_path) {
-                    reply.error(Error::from(e).0);
+                    reply.error(Error::from(e).into());
                     return;
                 }
-                self.inodes.del_inode_with_path(&new_path);
+                self.inodes
+                    .lock_or_panic("rename", "inodes")
+                    .del_inode_with_path(&new_path);
             }
         }
 
         match self.sftp.rename(&old_path, &new_path, Some(rename_flag)) {
             Ok(_) => {
-                self.inodes.rename(&old_path, &new_path);
+                self.inodes
+                    .lock_or_panic("rename", "inodes")
+                    .rename(&old_path, &new_path);
                 reply.ok();
             }
-            Err(e) => reply.error(Error::from(e).0),
+            Err(e) => reply.error(Error::from(e).into()),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Error(i32);
+struct Error(Errno);
+
+impl From<Error> for Errno {
+    fn from(value: Error) -> Self {
+        value.0
+    }
+}
+
+impl AsRef<Errno> for Error {
+    fn as_ref(&self) -> &Errno {
+        &self.0
+    }
+}
 
 impl From<ssh2::Error> for Error {
     fn from(value: ssh2::Error) -> Self {
         let eno = match value.code() {
-            ssh2::ErrorCode::Session(_) => libc::ENXIO,
+            ssh2::ErrorCode::Session(_) => Errno::ENXIO,
             ssh2::ErrorCode::SFTP(i) => match i {
                 // libssh2のlibssh2_sftp.hにて定義されている。
-                2 => libc::ENOENT,        // NO_SUCH_FILE
-                3 => libc::EACCES,        // permission_denied
-                4 => libc::EIO,           // failure
-                5 => libc::ENODEV,        // bad message
-                6 => libc::ENXIO,         // no connection
-                7 => libc::ENETDOWN,      // connection lost
-                8 => libc::ENODEV,        // unsported
-                9 => libc::EBADF,         // invalid handle
-                10 => libc::ENOENT,       //no such path
-                11 => libc::EEXIST,       // file already exists
-                12 => libc::EACCES,       // write protected
-                13 => libc::ENXIO,        // no media
-                14 => libc::ENOSPC,       // no space on filesystem
-                15 => libc::EDQUOT,       // quota exceeded
-                16 => libc::ENODEV,       // unknown principal
-                17 => libc::ENOLCK,       // lock conflict
-                18 => libc::ENOTEMPTY,    // dir not empty
-                19 => libc::ENOTDIR,      // not a directory
-                20 => libc::ENAMETOOLONG, // invalid file name
-                21 => libc::ELOOP,        // link loop
+                2 => Errno::ENOENT,        // NO_SUCH_FILE
+                3 => Errno::EACCES,        // permission_denied
+                4 => Errno::EIO,           // failure
+                5 => Errno::ENODEV,        // bad message
+                6 => Errno::ENXIO,         // no connection
+                7 => Errno::ENETDOWN,      // connection lost
+                8 => Errno::ENODEV,        // unsported
+                9 => Errno::EBADF,         // invalid handle
+                10 => Errno::ENOENT,       //no such path
+                11 => Errno::EEXIST,       // file already exists
+                12 => Errno::EACCES,       // write protected
+                13 => Errno::ENXIO,        // no media
+                14 => Errno::ENOSPC,       // no space on filesystem
+                15 => Errno::EDQUOT,       // quota exceeded
+                16 => Errno::ENODEV,       // unknown principal
+                17 => Errno::ENOLCK,       // lock conflict
+                18 => Errno::ENOTEMPTY,    // dir not empty
+                19 => Errno::ENOTDIR,      // not a directory
+                20 => Errno::ENAMETOOLONG, // invalid file name
+                21 => Errno::ELOOP,        // link loop
                 _ => {
                     error!("An unknown error occurred during SSH2.[{}]", i);
-                    libc::EIO
+                    Errno::EIO
                 }
             },
         };
@@ -704,31 +768,31 @@ impl From<std::io::Error> for Error {
     fn from(value: std::io::Error) -> Self {
         use std::io::ErrorKind::*;
         let eno = match value.kind() {
-            NotFound => libc::ENOENT,
-            PermissionDenied => libc::EACCES,
-            ConnectionRefused => libc::ECONNREFUSED,
-            ConnectionReset => libc::ECONNRESET,
-            ConnectionAborted => libc::ECONNABORTED,
-            NotConnected => libc::ENOTCONN,
-            AddrInUse => libc::EADDRINUSE,
-            AddrNotAvailable => libc::EADDRNOTAVAIL,
-            BrokenPipe => libc::EPIPE,
-            AlreadyExists => libc::EEXIST,
-            WouldBlock => libc::EWOULDBLOCK,
-            InvalidInput => libc::EINVAL,
-            InvalidData => libc::EILSEQ,
-            TimedOut => libc::ETIMEDOUT,
-            WriteZero => libc::EIO,
-            Interrupted => libc::EINTR,
-            Unsupported => libc::ENOTSUP,
-            UnexpectedEof => libc::EOF,
-            OutOfMemory => libc::ENOMEM,
+            NotFound => Errno::ENOENT,
+            PermissionDenied => Errno::EACCES,
+            ConnectionRefused => Errno::ECONNREFUSED,
+            ConnectionReset => Errno::ECONNRESET,
+            ConnectionAborted => Errno::ECONNABORTED,
+            NotConnected => Errno::ENOTCONN,
+            AddrInUse => Errno::EADDRINUSE,
+            AddrNotAvailable => Errno::EADDRNOTAVAIL,
+            BrokenPipe => Errno::EPIPE,
+            AlreadyExists => Errno::EEXIST,
+            WouldBlock => Errno::EWOULDBLOCK,
+            InvalidInput => Errno::EINVAL,
+            InvalidData => Errno::EILSEQ,
+            TimedOut => Errno::ETIMEDOUT,
+            WriteZero => Errno::EIO,
+            Interrupted => Errno::EINTR,
+            Unsupported => Errno::ENOTSUP,
+            UnexpectedEof => Errno::EFAULT,
+            OutOfMemory => Errno::ENOMEM,
             _ => {
                 error!(
                     "An unknown error occurred during std::io.[{}]",
                     value.kind()
                 );
-                libc::EIO
+                Errno::EIO
             }
         };
         Self(eno)

@@ -19,6 +19,9 @@ fn main() -> Result<()> {
 
     let path = make_remote_path(&opt, &ssh).context("Failed to generate remote path.")?;
     let options = make_mount_option(&opt);
+    let mut config = fuser::Config::default();
+    config.mount_options = options;
+
     let mount_point = make_full_path(&opt.mount_point)?;
 
     // プロセスのデーモン化
@@ -30,6 +33,6 @@ fn main() -> Result<()> {
     }
     // ファイルシステムへのマウント実行
     let fs = ssh_filesystem::Sshfs::new(ssh, &path)?;
-    fuser::mount2(fs, mount_point, &options).context("Failed to mount FUSE.")?;
+    fuser::mount(fs, mount_point, &config).context("Failed to mount FUSE.")?;
     Ok(())
 }
