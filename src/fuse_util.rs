@@ -75,6 +75,7 @@ pub fn make_mount_option(cmd_opt: &Opt) -> Vec<fuser::MountOption> {
     options.push(MountOption::NoDev);
     options.push(MountOption::DirSync);
     options.push(MountOption::Sync);
+    options.push(MountOption::DefaultPermissions);
     match cmd_opt.readonly {
         true => options.push(MountOption::RO),
         false => options.push(MountOption::RW),

@@ -1,6 +1,6 @@
 pub mod remote_host;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -39,6 +39,9 @@ pub struct Opt {
     /// run in daemon mode
     #[arg(short, long)]
     pub daemon: bool,
+    /// Set the log level to debug mode
+    #[arg(long)]
+    pub debug: bool,
 }
 
 /// 指定されたディレクトリが存在し、中にファイルがないことを確認する。

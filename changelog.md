@@ -6,6 +6,9 @@
 - cargo clippyの警告に対応(主に、参照指定の扱いの変更)
 - Cargo.tomlの[profile-release]の指定変更(最適化関係の一連の変更)
 - fuserクレートを0.18.0に変更。これに伴い、関数呼び出しのAPI変更への対応一式。
+- 接続時のマウントオプションにDefaultPermissionsを追加。
+- ログの記録をjournalctlに対応。(env_loggerを廃止)
+- 起動オプションに--debugを追加。デバッグログの出力を可能にする。
 
 ## v0.3.2 (2026-02-01)
 
