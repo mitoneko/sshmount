@@ -3,7 +3,7 @@ mod file_handle;
 mod inode;
 mod mutex_lock_ext;
 
-use file_handle::Fhandles;
+use file_handle::{Dhandles, Fhandles};
 use inode::Inodes;
 use mutex_lock_ext::MutexLockExt;
 
@@ -29,6 +29,7 @@ pub struct Sshfs {
     sftp: Sftp,
     inodes: Mutex<Inodes>,
     fhandls: Fhandles,
+    dhandls: Dhandles, // opendir時点のディレクトリ一覧を保持する。
     _top_path: PathBuf,
 }
 
@@ -53,6 +54,7 @@ impl Sshfs {
             sftp,
             inodes,
             fhandls: Fhandles::new(),
+            dhandls: Dhandles::new(),
             _top_path: top_path,
         })
     }
@@ -95,6 +97,16 @@ impl Sshfs {
             ssh2::FileType::Symlink => Ok(fuser::FileType::Symlink),
             ssh2::FileType::Socket => Ok(fuser::FileType::Socket),
             ssh2::FileType::Other(_) => Err(Error(Errno::EBADF)),
+        }
+    }
+
+    /// rmdirのエラーをerrnoに変換する。
+    fn rmdir_errno(e: ssh2::Error) -> Errno {
+        if e.code() == ErrorCode::Session(-31) {
+            // ssh2ライブラリの返すエラーが妙。置換しておく。
+            Errno::ENOTEMPTY
+        } else {
+            Error::from(e).into()
         }
     }
 
@@ -146,16 +158,12 @@ impl Filesystem for Sshfs {
         };
     }
 
-    fn readdir(
-        &self,
-        _req: &Request,
-        ino: INodeNo,
-        _fh: FileHandle,
-        offset: u64,
-        mut reply: ReplyDirectory,
-    ) {
-        debug!("[readdir] start: ino={}, offset={}", ino, offset);
-        let Some(path) = self.inodes.lock_or_panic("readdir", "inodes").get_path(ino) else {
+    /// ディレクトリを開く。この時点の一覧を取得し、ハンドルに保持する。
+    /// (修正)従来はreaddirのたびに一覧を取り直していたため、読み出し途中の
+    /// unlinkでoffsetがずれ、remove_dir_allなどでエントリが欠落していた。
+    fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlagsFuser, reply: fuser::ReplyOpen) {
+        debug!("[opendir] start: ino={}", ino);
+        let Some(path) = self.inodes.lock_or_panic("opendir", "inodes").get_path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -171,39 +179,71 @@ impl Filesystem for Sshfs {
                 }; // "." ".."の解決用。 attr ディレクトリであることのみを示す。
                 dir.insert(0, (Path::new("..").into(), cur_file_attr.clone()));
                 dir.insert(0, (Path::new(".").into(), cur_file_attr));
-                for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
-                    let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
-                        INodeNo(1)
-                    } else {
-                        self.inodes.lock_or_panic("readdir", "inodes").add(&f.0)
-                    };
-                    let name = match f.0.file_name() {
-                        Some(n) => n,
-                        None => f.0.as_os_str(),
-                    };
-                    let filetype = &f.1.file_type();
-                    let filetype = match Self::conv_file_kind_ssh2fuser(filetype) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            warn!(
-                                "[readdir]ファイルタイプ解析失敗: inode={}, name={:?}",
-                                ino, name
-                            );
-                            reply.error(e.into());
-                            return;
-                        }
-                    };
-                    if reply.add(ino, i, filetype, name) {
-                        break;
-                    }
-                }
-                reply.ok();
+                let fh = FileHandle(self.dhandls.add_dir(dir));
+                reply.opened(fh, FopenFlags::empty());
             }
             Err(e) => {
-                warn!("[readdir]ssh2::readdir内でエラー発生-- {:?}", e);
+                warn!("[opendir]ssh2::readdir内でエラー発生-- {:?}", e);
                 reply.error(Error::from(e).into());
             }
+        }
+    }
+
+    fn readdir(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        mut reply: ReplyDirectory,
+    ) {
+        debug!("[readdir] start: ino={}, offset={}", ino, offset);
+        // (修正)opendirで保持したスナップショットを使う。
+        let Some(dir) = self.dhandls.get_dir(fh.0) else {
+            reply.error(Errno::EBADF);
+            return;
         };
+        for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
+            let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
+                INodeNo(1)
+            } else {
+                self.inodes.lock_or_panic("readdir", "inodes").add(&f.0)
+            };
+            let name = match f.0.file_name() {
+                Some(n) => n,
+                None => f.0.as_os_str(),
+            };
+            let filetype = &f.1.file_type();
+            let filetype = match Self::conv_file_kind_ssh2fuser(filetype) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(
+                        "[readdir]ファイルタイプ解析失敗: inode={}, name={:?}",
+                        ino, name
+                    );
+                    reply.error(e.into());
+                    return;
+                }
+            };
+            if reply.add(ino, i, filetype, name) {
+                break;
+            }
+        }
+        reply.ok();
+    }
+
+    /// ディレクトリを閉じ、保持していた一覧を破棄する。
+    fn releasedir(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlagsFuser,
+        reply: fuser::ReplyEmpty,
+    ) {
+        debug!("[releasedir] start: fh={}", fh);
+        self.dhandls.del_dir(fh.0);
+        reply.ok();
     }
 
     fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
@@ -548,14 +588,7 @@ impl Filesystem for Sshfs {
                     .del_inode_with_path(&path);
                 reply.ok()
             }
-            Err(e) => {
-                if e.code() == ErrorCode::Session(-31) {
-                    // ssh2ライブラリの返すエラーが妙。置換しておく。
-                    reply.error(Errno::ENOTEMPTY);
-                } else {
-                    reply.error(Error::from(e).into())
-                }
-            }
+            Err(e) => reply.error(Self::rmdir_errno(e)),
         }
     }
 
@@ -679,29 +712,61 @@ impl Filesystem for Sshfs {
         };
         new_path.push(newname);
 
-        let mut rename_flag = ssh2::RenameFlags::NATIVE;
+        // (修正)RENAME_EXCHANGE(入れ替え)はSFTPでは実現できない。
+        // 従来はATOMICフラグに誤って対応させていた。
         if flags.contains(RenameFlags::RENAME_EXCHANGE) {
-            rename_flag.insert(ssh2::RenameFlags::ATOMIC);
+            reply.error(Errno::EINVAL);
+            return;
         }
-        if flags.contains(RenameFlags::RENAME_NOREPLACE) {
-            // renameのOVERWRITEが効いてない。手動で消す。
-            if let Ok(stat) = self.sftp.lstat(&new_path) {
-                if stat.is_dir() {
-                    if let Err(e) = self.sftp.rmdir(&new_path) {
-                        reply.error(Error::from(e).into());
-                        return;
-                    }
-                } else if let Err(e) = self.sftp.unlink(&new_path) {
+
+        // (修正)従来はRENAME_NOREPLACE指定時にだけ移動先を削除しており、判定が逆だった。
+        // 通常のrename(flags=0)はPOSIXでは移動先を上書きするが、SFTPのrenameは
+        // 移動先が存在すると失敗する(EIOになる)。そのため、移動先を手動で消してから行う。
+        // RENAME_NOREPLACE指定時は、移動先が存在すればEEXISTを返す。
+        if let Ok(new_stat) = self.sftp.lstat(&new_path) {
+            if flags.contains(RenameFlags::RENAME_NOREPLACE) {
+                reply.error(Errno::EEXIST);
+                return;
+            }
+            if old_path == new_path {
+                reply.ok();
+                return;
+            }
+            let old_stat = match self.sftp.lstat(&old_path) {
+                Ok(s) => s,
+                Err(e) => {
                     reply.error(Error::from(e).into());
                     return;
                 }
-                self.inodes
-                    .lock_or_panic("rename", "inodes")
-                    .del_inode_with_path(&new_path);
+            };
+            // POSIXの型の組み合わせ規則
+            if old_stat.is_dir() && !new_stat.is_dir() {
+                reply.error(Errno::ENOTDIR);
+                return;
             }
+            if !old_stat.is_dir() && new_stat.is_dir() {
+                reply.error(Errno::EISDIR);
+                return;
+            }
+            if new_stat.is_dir() {
+                // 空でなければENOTEMPTYで失敗する(POSIXと同じ)。
+                if let Err(e) = self.sftp.rmdir(&new_path) {
+                    reply.error(Self::rmdir_errno(e));
+                    return;
+                }
+            } else if let Err(e) = self.sftp.unlink(&new_path) {
+                reply.error(Error::from(e).into());
+                return;
+            }
+            self.inodes
+                .lock_or_panic("rename", "inodes")
+                .del_inode_with_path(&new_path);
         }
 
-        match self.sftp.rename(&old_path, &new_path, Some(rename_flag)) {
+        match self
+            .sftp
+            .rename(&old_path, &new_path, Some(ssh2::RenameFlags::NATIVE))
+        {
             Ok(_) => {
                 self.inodes
                     .lock_or_panic("rename", "inodes")
