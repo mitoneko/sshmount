@@ -14,3 +14,4 @@
 issue.txt
 opendoc
 /test_data/*
+/tests/test.env

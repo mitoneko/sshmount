@@ -95,7 +95,21 @@ impl Inodes {
             return;
         };
         list_guard.remove_left(&ino);
-        list_guard.insert(ino, new_path);
+        list_guard.insert(ino, new_path.clone());
+        // ディレクトリ配下のファイルのパスを変更する。
+        // old_pathがファイルだったとしても、strip_prefixが全件一致しないだけだから問題なし。
+        // old_path本体は、すでに変更されているので、ここでは一致しない。
+        let need_update_files: Vec<(u64, PathBuf)> = list_guard
+            .iter()
+            .filter_map(|(ino, path)| {
+                let suffix = path.strip_prefix(&old_path).ok()?;
+                Some((*ino, new_path.join(suffix)))
+            })
+            .collect();
+        for (ino, new_path) in need_update_files {
+            list_guard.remove_left(&ino);
+            list_guard.insert(ino, new_path);
+        }
     }
 }
 
@@ -160,5 +174,53 @@ mod inode_test {
         let inodes2 = make_inodes();
         inodes.rename(Path::new("nai"), Path::new("kawattenai"));
         assert_eq!(*inodes.list.lock().unwrap(), *inodes2.list.lock().unwrap());
+    }
+
+    #[test]
+    fn inodes_rename_dir() {
+        let mut inodes = make_inodes();
+        let old_dir = Path::new("test3");
+        let dir_inode = inodes.get_inode(old_dir).unwrap();
+        let inode1 = inodes.add(old_dir.join("file1"));
+        let inode2 = inodes.add(old_dir.join("file2"));
+        let new_dir = Path::new("new_test3");
+        inodes.rename(old_dir, new_dir);
+        assert_eq!(
+            inodes.get_path(dir_inode),
+            Some(new_dir.into()),
+            "ディレクトリのinodeのパスがおかしい"
+        );
+        let new_file1 = inodes.get_path(inode1).unwrap();
+        let new_file2 = inodes.get_path(inode2).unwrap();
+        assert_eq!(
+            new_file1,
+            new_dir.join("file1"),
+            "ファイル1のパスがおかしい"
+        );
+        assert_eq!(
+            new_file2,
+            new_dir.join("file2"),
+            "ファイル2のパスがおかしい"
+        );
+        assert_eq!(
+            inodes.get_inode(new_dir.join("file1")),
+            Some(inode1),
+            "逆引きしたinodeが一致しない"
+        );
+        assert_eq!(
+            inodes.get_inode(new_dir.join("file2")),
+            Some(inode2),
+            "逆引きしたinodeが一致しない"
+        );
+        assert_eq!(
+            inodes.get_inode(old_dir.join("file1")),
+            None,
+            "古いパスで逆引きできてしまう"
+        );
+        assert_eq!(
+            inodes.get_inode(old_dir.join("file2")),
+            None,
+            "古いパスで逆引きできてしまう"
+        );
     }
 }

@@ -1,0 +1,37 @@
+env_files = ["./tests/test.env"]
+
+[tasks.envprint]
+script = [
+    "echo remote = $SSH_TEST_REMOTE",
+    "echo mount = $SSH_TEST_MOUNT",
+]
+
+[tasks.build]
+dependencies = ["clippy"]
+
+[tasks.pre-sshmount-test]
+command = "cargo"
+args = ["run", "--", "-d", "--debug", "${SSH_TEST_REMOTE}", "${SSH_TEST_MOUNT}"]
+dependencies = ["build"]
+
+[tasks.exec-sshmount-test]
+env = { RUST_BACKTRACE = "0" }
+ignore_errors = true
+command = "cargo"
+args = ["test", "--", "--include-ignored",]
+dependencies = ["pre-sshmount-test"]
+
+[tasks.post-sshmount-test]
+script = [
+    '''
+    #!/bin/bash
+    echo end sshmount_test. unmount ${SSH_TEST_MOUNT}
+    sleep 2s
+    umount ${SSH_TEST_MOUNT}
+    '''
+]
+dependencies = ["exec-sshmount-test"]
+
+[tasks.test]
+clear = true
+run_task = "post-sshmount-test"

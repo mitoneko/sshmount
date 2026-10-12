@@ -100,13 +100,14 @@ impl Sshfs {
         }
     }
 
-    /// rmdirのエラーをerrnoに変換する。
+    /// rmdir失敗時のssh2エラーをerrnoに変換する。
+    /// 一部のSFTPサーバ/ライブラリでは、空でないディレクトリ削除時に
+    /// ENOTEMPTY相当を直接返さず、曖昧な失敗コードになるため補正する。
     fn rmdir_errno(e: ssh2::Error) -> Errno {
-        if e.code() == ErrorCode::Session(-31) {
-            // ssh2ライブラリの返すエラーが妙。置換しておく。
-            Errno::ENOTEMPTY
-        } else {
-            Error::from(e).into()
+        debug!("[rmdir_errno] ssh2::Error => {:?}", e);
+        match e.code() {
+            ErrorCode::Session(-31) | ErrorCode::SFTP(4) => Errno::ENOTEMPTY,
+            _ => Error::from(e).into(),
         }
     }
 
@@ -161,7 +162,13 @@ impl Filesystem for Sshfs {
     /// ディレクトリを開く。この時点の一覧を取得し、ハンドルに保持する。
     /// (修正)従来はreaddirのたびに一覧を取り直していたため、読み出し途中の
     /// unlinkでoffsetがずれ、remove_dir_allなどでエントリが欠落していた。
-    fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlagsFuser, reply: fuser::ReplyOpen) {
+    fn opendir(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _flags: OpenFlagsFuser,
+        reply: fuser::ReplyOpen,
+    ) {
         debug!("[opendir] start: ino={}", ino);
         let Some(path) = self.inodes.lock_or_panic("opendir", "inodes").get_path(ino) else {
             reply.error(Errno::ENOENT);

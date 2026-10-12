@@ -1,16 +1,19 @@
 # 更新履歴
-## v0.3.3 (2026-09-27)
+## v0.4.0 (2026-09-27)
 
-- 依存クレート群の更新。
-- Rust Edition 2024への対応。
-- cargo clippyの警告に対応(主に、参照指定の扱いの変更)
-- Cargo.tomlの[profile-release]の指定変更(最適化関係の一連の変更)
-- fuserクレートを0.18.0に変更。これに伴い、関数呼び出しのAPI変更への対応一式。
-- 接続時のマウントオプションにDefaultPermissionsを追加。
-- ログの記録をjournalctlに対応。(env_loggerを廃止)
-- 起動オプションに--debugを追加。デバッグログの出力を可能にする。
+- (internal)依存クレート群の更新。
+- (internal)Rust Edition 2024への対応。
+- (refactor)cargo clippyの警告に対応(主に、参照指定の扱いの変更)
+- (optimize)Cargo.tomlの[profile-release]の指定変更(最適化関係の一連の変更)
+- (feature)fuserクレートを0.18.0に変更。これに伴い、関数呼び出しのAPI変更への対応一式。
+- (feature)接続時のマウントオプションにDefaultPermissionsを追加。
+- (feature)ログの記録をjournalctlに対応。(env_loggerを廃止)
+- (feature)起動オプションに--debugを追加。デバッグログの出力を可能にする。
 - (bug) 多数のファイル削除が出た際、ファイルハンドルの扱いが不適切で削除が失敗するバグの修正(ファイルハンドルのキャッシュ追加)
 - (bug) rename時のRENAME_NOREPLACEの解釈誤りを修正。rename先が存在する場合の処置を修正
+- (bug) rmdir_errnoの修正。ディレクトリの削除時に、他のパターンがあったことで変換漏れが出ていた。
+- (feature) 統合テスト環境の創設と、実実行によるテストの追加。cargo make testにて実行可能。
+- (bug) ディレクトリのrename時に、配下のファイルアクセスが新ディレクトリ名でできない問題を修正。Inode実装の更新。
 
 ## v0.3.2 (2026-02-01)
 
