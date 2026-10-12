@@ -172,5 +172,6 @@ fn test_rename_dir() -> Result<(), Box<dyn std::error::Error>> {
             "書き込んだ内容と読み出した内容が一致しない。"
         );
     }
+    fs::remove_dir_all(renamed_dir_path)?;
     Ok(())
 }
