@@ -1,7 +1,7 @@
 //! ssh接続関連関数モジュール
 
 use crate::cmdline_opt::Opt;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use dialoguer::Password;
 use dns_lookup::lookup_host;
 use log::{debug, error, info, warn};
@@ -31,7 +31,7 @@ pub fn make_ssh_session(opt: &Opt) -> Result<Session> {
         .ok_or(anyhow!("User name is not specified."))?;
     info!(
         "[main] info connection-> user name:\"{}\", ip address:{:?}",
-        &user_name, &addresses
+        user_name, addresses
     );
     let identity_file = &host_params.identity_file;
 
@@ -140,7 +140,7 @@ fn get_identity_file(opt: &Opt, host_params: &HostParams) -> Result<Option<Vec<P
         std::fs::File::open(&path).with_context(|| {
             format!(
                 "Unable to access the secret key file specified by the \"-i\" option. [{}]",
-                &path.to_string_lossy()
+                path.to_string_lossy()
             )
         })?;
         Ok(Some(vec![path]))

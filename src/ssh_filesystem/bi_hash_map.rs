@@ -119,6 +119,12 @@ where
         };
         result
     }
+
+    /// リスト内全件の列挙を返す。
+    /// 返却されるタプルの順序は保証しない。
+    pub fn iter(&self) -> impl Iterator<Item = (&L, &R)> {
+        self.left.iter().map(|(l, r)| (l.as_ref(), r.as_ref()))
+    }
 }
 
 /// 挿入時の上書き結果
