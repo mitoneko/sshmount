@@ -491,7 +491,7 @@ fn thread_func(path: impl AsRef<Path>, barrier: Arc<Barrier>) -> std::io::Result
         );
     }
     let test_dir_path = base_path.join(format!("test_13_dir_{}", branch_num));
-    let moved_file_path_suffix = test_file_path.strip_prefix(&base_path).unwrap();
+    let moved_file_path_suffix = test_file_path.strip_prefix(base_path).unwrap();
     let moved_file_path = test_dir_path.join(moved_file_path_suffix);
     fs::create_dir(&test_dir_path)?;
     fs::rename(&test_file_path, &moved_file_path)?;
