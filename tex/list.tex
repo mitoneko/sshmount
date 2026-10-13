@@ -16,11 +16,12 @@
 \inputminted[linenos, breaklines]{rust}{src/main.rs}
 \clearpage
 
-\section{コマンドラインオプションの定義 cmdline\_opt.rs}
+\section{コマンドラインオプションの解析関係}
+\subsection{コマンドラインオプションの定義 cmdline\_opt.rs}
 \inputminted[linenos, breaklines]{rust}{src/cmdline_opt.rs}
 \clearpage
 
-\section{コマンドライン　remotehostの解析部 cmdline\_opt/remote\_host.rs}
+\subsection{コマンドライン　remotehostの解析部 cmdline\_opt/remote\_host.rs}
 \inputminted[linenos, breaklines]{rust}{src/cmdline_opt/remote_host.rs}
 \clearpage
 
@@ -32,19 +33,42 @@
 \inputminted[linenos, breaklines]{rust}{src/fuse_util.rs}
 \clearpage
 
-\section{ファイルシステムモジュール ssh\_filesystem.rs}
+\section{FUSE　ファイルシステム本体と関連モジュール}
+\subsection{ファイルシステムモジュール ssh\_filesystem.rs}
 \inputminted[linenos, breaklines]{rust}{src/ssh_filesystem.rs}
 \clearpage
 
-\section{ファイルハンドル管理モジュール ssh\_filesystem/file\_handle.rs}
+\subsection{ファイルハンドル管理モジュール ssh\_filesystem/file\_handle.rs}
 \inputminted[linenos, breaklines]{rust}{src/ssh_filesystem/file_handle.rs}
 \clearpage
 
-\section{Inode管理モジュール ssh\_filesystem/inode.rs}
+\subsection{Inode管理モジュール ssh\_filesystem/inode.rs}
 \inputminted[linenos, breaklines]{rust}{src/ssh_filesystem/inode.rs}
 \clearpage
 
-\section{双方向ハッシュマップモジュール ssh\_filesystem/bi\_hash\_map.rs}
+\subsection{双方向ハッシュマップモジュール ssh\_filesystem/bi\_hash\_map.rs}
 \inputminted[linenos, breaklines]{rust}{src/ssh_filesystem/bi_hash_map.rs}
+\clearpage
+
+\subsection{Mutex用拡張モジュール ssh\_filesystem/mutex\_lock\_ext.rs}
+\inputminted[linenos, breaklines]{rust}{src/ssh_filesystem/mutex_lock_ext.rs}
+\clearpage
+
+\section{統合テスト用モジュール関係}
+\subsection{単純なファイルアクセスのテストモジュール tests/simple\_file\_access.rs}
+\inputminted[linenos, breaklines]{rust}{tests/simple_file_access.rs}
+\clearpage
+
+\subsection{共通ユーティリティー tests/common/mod.rs}
+\inputminted[linenos, breaklines]{rust}{tests/common/mod.rs}
+\clearpage
+
+\subsection{テスト用サーバー設定のコンフィグファイルサンプル tests/test.env.sample}
+ これは、cargo make testで使用する環境変数です。sshmountの接続設定を記述します。
+ 実際に使用するときは、リモートパスとマウントポイントを記述し、'test.env'にリネームします。
+\inputminted[linenos, breaklines]{text}{tests/test.env.sample}
+
+\subsection{主にテスト用に設定したcargo-makeのmakeファイル /Makefile.toml}
+\inputminted[linenos, breaklines]{toml}{root/Makefile.toml}
 
 \end{document}

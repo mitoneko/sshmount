@@ -9,6 +9,8 @@
 /tex/*.fdb_latexmk
 /tex/*.fls
 /tex/src
+/tex/tests
+/tex/root
 /tex/_minted-list
 /tex/_minted
 issue.txt
