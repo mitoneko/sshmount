@@ -30,7 +30,7 @@ impl Inodes {
     /// pathで指定されたinodeを生成し、登録する。
     /// すでにpathの登録が存在する場合、追加はせず、登録済みのinodeを返す。
     /// 初めて、この関数が呼ばれるときは、ファイルシステムにおけるルートであり、inode番号1が割り当てられる。
-    pub(super) fn add<P: AsRef<Path>>(&mut self, path: P) -> INodeNo {
+    pub(super) fn add<P: AsRef<Path>>(&self, path: P) -> INodeNo {
         let mut list_guard = self.list.lock_or_panic("inodes::add", "inode list");
         let path = PathBuf::from(path.as_ref());
         match list_guard.get_left(&path) {
@@ -69,7 +69,7 @@ impl Inodes {
     /// inodesから、inodeの登録を削除する
     /// (主用途がなくなっちゃったけど、将来のために残しておく)
     #[allow(dead_code)]
-    pub(super) fn del_inode(&mut self, inode: INodeNo) -> Option<INodeNo> {
+    pub(super) fn del_inode(&self, inode: INodeNo) -> Option<INodeNo> {
         self.list
             .lock_or_panic("Inodes::del_inode", "inode list")
             .remove_left(&inode.into())
@@ -77,7 +77,7 @@ impl Inodes {
     }
 
     /// path名からiNodeの登録を削除する
-    pub(super) fn del_inode_with_path<P: AsRef<Path>>(&mut self, path: P) -> Option<INodeNo> {
+    pub(super) fn del_inode_with_path<P: AsRef<Path>>(&self, path: P) -> Option<INodeNo> {
         let path = PathBuf::from(path.as_ref());
         self.list
             .lock_or_panic("Inodes::del_inode_with_path", "inode list")
@@ -87,7 +87,7 @@ impl Inodes {
 
     /// 登録されているinodeのpathを変更する。
     /// old_pathが存在しなければ、なにもしない。
-    pub(super) fn rename<P: AsRef<Path>>(&mut self, old_path: P, new_path: P) {
+    pub(super) fn rename<P: AsRef<Path>>(&self, old_path: P, new_path: P) {
         let old_path = PathBuf::from(old_path.as_ref());
         let new_path = PathBuf::from(new_path.as_ref());
         let mut list_guard = self.list.lock_or_panic("Inodes::rename", "inode list");
@@ -121,7 +121,7 @@ mod inode_test {
 
     #[test]
     fn inode_add_test() {
-        let mut inodes = Inodes::new();
+        let inodes = Inodes::new();
         assert_eq!(inodes.add(""), INodeNo(1));
         assert_eq!(inodes.add(Path::new("test")), INodeNo(2));
         assert_eq!(inodes.add(Path::new("")), INodeNo(1));
@@ -132,7 +132,7 @@ mod inode_test {
     }
 
     fn make_inodes() -> Inodes {
-        let mut inodes = Inodes::new();
+        let inodes = Inodes::new();
         inodes.add(Path::new(""));
         inodes.add(Path::new("test"));
         inodes.add(Path::new("test2"));
@@ -163,14 +163,14 @@ mod inode_test {
 
     #[test]
     fn inodes_rename() {
-        let mut inodes = make_inodes();
+        let inodes = make_inodes();
         let old = Path::new("test2");
         let new = Path::new("new_test");
         let ino = inodes.get_inode(old).unwrap();
         inodes.rename(old, new);
         assert_eq!(inodes.get_path(ino), Some(new.into()));
 
-        let mut inodes = make_inodes();
+        let inodes = make_inodes();
         let inodes2 = make_inodes();
         inodes.rename(Path::new("nai"), Path::new("kawattenai"));
         assert_eq!(*inodes.list.lock().unwrap(), *inodes2.list.lock().unwrap());
@@ -178,7 +178,7 @@ mod inode_test {
 
     #[test]
     fn inodes_rename_dir() {
-        let mut inodes = make_inodes();
+        let inodes = make_inodes();
         let old_dir = Path::new("test3");
         let dir_inode = inodes.get_inode(old_dir).unwrap();
         let inode1 = inodes.add(old_dir.join("file1"));

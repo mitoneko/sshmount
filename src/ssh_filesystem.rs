@@ -19,7 +19,6 @@ use std::{
     ffi::OsStr,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -27,7 +26,7 @@ use std::{
 pub struct Sshfs {
     _session: Session,
     sftp: Sftp,
-    inodes: Mutex<Inodes>,
+    inodes: Inodes,
     fhandls: Fhandles,
     dhandls: Dhandles, // opendir時点のディレクトリ一覧を保持する。
     _top_path: PathBuf,
@@ -35,10 +34,9 @@ pub struct Sshfs {
 
 impl Sshfs {
     pub fn new<P: AsRef<Path>>(session: Session, path: P) -> anyhow::Result<Self> {
-        let mut inodes = Inodes::new();
+        let inodes = Inodes::new();
         let top_path: PathBuf = path.as_ref().into();
         inodes.add(&top_path);
-        let inodes = Mutex::new(inodes);
         let sftp = session
             .sftp()
             .inspect_err(|_| {
@@ -64,10 +62,7 @@ impl Sshfs {
     fn getattr_from_ssh2(&self, path: &Path, uid: u32, gid: u32) -> Result<FileAttr, Error> {
         let attr_ssh2 = self.sftp.lstat(path)?;
         let kind = Self::conv_file_kind_ssh2fuser(&attr_ssh2.file_type())?;
-        let ino = self
-            .inodes
-            .lock_or_panic("get_attr_from_ssh2", "inodes")
-            .add(path);
+        let ino = self.inodes.add(path);
         Ok(FileAttr {
             ino,
             size: attr_ssh2.size.unwrap_or(0),
@@ -122,27 +117,28 @@ impl Sshfs {
 impl Filesystem for Sshfs {
     fn lookup(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         debug!("[lookup] start: parent={}, name={:?}", parent, name);
-        let Some(mut path) = self
-            .inodes
-            .lock_or_panic("lookup", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut path) = self.inodes.get_path(parent) else {
             error!("[lookup] 親ディレクトリの検索に失敗 inode={}", parent);
             reply.error(Errno::ENOENT);
             return;
         };
         path.push(Path::new(name));
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
-            Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
+            Ok(attr) => {
+                debug!("[lookup Ok] inode:{:?}, kind:{:?}", attr.ino, attr.kind);
+                reply.entry(&Duration::from_secs(1), &attr, Generation(0))
+            }
             Err(e) => {
-                reply.error(e.into());
+                let e = Error::from(e);
+                debug!("[lookup err] {}", e);
+                reply.error(e.into())
             }
         };
     }
 
     fn getattr(&self, req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         debug!("[getattr] start: ino={}", ino);
-        let Some(path) = self.inodes.lock_or_panic("getattr", "inodes").get_path(ino) else {
+        let Some(path) = self.inodes.get_path(ino) else {
             error!("[getattr] path取得失敗: inode={}", ino);
             reply.error(Errno::ENOENT);
             return;
@@ -170,7 +166,7 @@ impl Filesystem for Sshfs {
         reply: fuser::ReplyOpen,
     ) {
         debug!("[opendir] start: ino={}", ino);
-        let Some(path) = self.inodes.lock_or_panic("opendir", "inodes").get_path(ino) else {
+        let Some(path) = self.inodes.get_path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -214,7 +210,7 @@ impl Filesystem for Sshfs {
             let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
                 INodeNo(1)
             } else {
-                self.inodes.lock_or_panic("readdir", "inodes").add(&f.0)
+                self.inodes.add(&f.0)
             };
             let name = match f.0.file_name() {
                 Some(n) => n,
@@ -255,11 +251,7 @@ impl Filesystem for Sshfs {
 
     fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
         debug!("[readlink] start: ino={}", ino);
-        let Some(path) = self
-            .inodes
-            .lock_or_panic("readlink", "inodes")
-            .get_path(ino)
-        else {
+        let Some(path) = self.inodes.get_path(ino) else {
             error!("[readlink] 親ディレクトリの検索に失敗 {ino}");
             reply.error(Errno::ENOENT);
             return;
@@ -278,7 +270,7 @@ impl Filesystem for Sshfs {
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlagsFuser, reply: fuser::ReplyOpen) {
         debug!("[open] start: ino={}, flags={:x}", ino, flags);
-        let Some(file_name) = self.inodes.lock_or_panic("open", "inodes").get_path(ino) else {
+        let Some(file_name) = self.inodes.get_path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -493,11 +485,7 @@ impl Filesystem for Sshfs {
             return;
         }
         let mode = mode & (!umask | libc::S_IFMT);
-        let Some(mut new_name) = self
-            .inodes
-            .lock_or_panic("mknod", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut new_name) = self.inodes.get_path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -523,20 +511,14 @@ impl Filesystem for Sshfs {
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("[unlink] start: parent={}, name={:?}", parent, name);
-        let Some(mut path) = self
-            .inodes
-            .lock_or_panic("unlink", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut path) = self.inodes.get_path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
         path.push(name);
         match self.sftp.unlink(&path) {
             Ok(_) => {
-                self.inodes
-                    .lock_or_panic("unlink", "inodes")
-                    .del_inode_with_path(&path);
+                self.inodes.del_inode_with_path(&path);
                 reply.ok();
             }
             Err(e) => reply.error(Error::from(e).into()),
@@ -556,11 +538,7 @@ impl Filesystem for Sshfs {
             "[mkdir] start: parent={}, name={:?}, mode={:o}, umask={:o}",
             parent, name, mode, umask
         );
-        let Some(mut path) = self
-            .inodes
-            .lock_or_panic("mkdir", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut path) = self.inodes.get_path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -579,20 +557,14 @@ impl Filesystem for Sshfs {
 
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("[rmdir] start: parent={}, name={:?}", parent, name);
-        let Some(mut path) = self
-            .inodes
-            .lock_or_panic("mkdir", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut path) = self.inodes.get_path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
         path.push(name);
         match self.sftp.rmdir(&path) {
             Ok(_) => {
-                self.inodes
-                    .lock_or_panic("mkdir", "inodes")
-                    .del_inode_with_path(&path);
+                self.inodes.del_inode_with_path(&path);
                 reply.ok()
             }
             Err(e) => reply.error(Self::rmdir_errno(e)),
@@ -611,11 +583,7 @@ impl Filesystem for Sshfs {
             "[symlink] start: parent={}, name={:?}, link={:?}",
             parent, name, link
         );
-        let Some(mut target) = self
-            .inodes
-            .lock_or_panic("symlink", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut target) = self.inodes.get_path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -669,7 +637,7 @@ impl Filesystem for Sshfs {
                     .as_secs()
             }),
         };
-        let Some(filename) = self.inodes.lock_or_panic("setattr", "inodes").get_path(ino) else {
+        let Some(filename) = self.inodes.get_path(ino) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -699,21 +667,13 @@ impl Filesystem for Sshfs {
             "[rename] start: parent={}, name={:?}, newparent={}, newname={:?}, flags={}",
             parent, name, newparent, newname, flags
         );
-        let Some(mut old_path) = self
-            .inodes
-            .lock_or_panic("rename", "inodes")
-            .get_path(parent)
-        else {
+        let Some(mut old_path) = self.inodes.get_path(parent) else {
             reply.error(Errno::ENOENT);
             return;
         };
         old_path.push(name);
 
-        let Some(mut new_path) = self
-            .inodes
-            .lock_or_panic("rename", "inodes")
-            .get_path(newparent)
-        else {
+        let Some(mut new_path) = self.inodes.get_path(newparent) else {
             reply.error(Errno::ENOENT);
             return;
         };
@@ -765,9 +725,7 @@ impl Filesystem for Sshfs {
                 reply.error(Error::from(e).into());
                 return;
             }
-            self.inodes
-                .lock_or_panic("rename", "inodes")
-                .del_inode_with_path(&new_path);
+            self.inodes.del_inode_with_path(&new_path);
         }
 
         match self
@@ -775,9 +733,7 @@ impl Filesystem for Sshfs {
             .rename(&old_path, &new_path, Some(ssh2::RenameFlags::NATIVE))
         {
             Ok(_) => {
-                self.inodes
-                    .lock_or_panic("rename", "inodes")
-                    .rename(&old_path, &new_path);
+                self.inodes.rename(&old_path, &new_path);
                 reply.ok();
             }
             Err(e) => reply.error(Error::from(e).into()),
@@ -787,6 +743,16 @@ impl Filesystem for Sshfs {
 
 #[derive(Debug, Clone, Copy)]
 struct Error(Errno);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Error({})",
+            std::io::Error::from_raw_os_error(self.0.code())
+        )
+    }
+}
 
 impl From<Error> for Errno {
     fn from(value: Error) -> Self {
