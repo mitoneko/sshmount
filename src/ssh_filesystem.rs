@@ -28,8 +28,8 @@ pub struct Sshfs {
     sftp: Sftp,
     inodes: Inodes,
     fhandls: Fhandles,
-    dhandls: Dhandles, // opendir時点のディレクトリ一覧を保持する。
-    _top_path: PathBuf,
+    dhandls: Dhandles,  // opendir時点のディレクトリ一覧を保持する。
+    _top_path: PathBuf, // 大変。".."の解決で使わなきゃ。
 }
 
 impl Sshfs {
@@ -129,8 +129,7 @@ impl Filesystem for Sshfs {
                 reply.entry(&Duration::from_secs(1), &attr, Generation(0))
             }
             Err(e) => {
-                let e = Error::from(e);
-                debug!("[lookup err] {}", e);
+                warn!("[lookup err] {}", e);
                 reply.error(e.into())
             }
         };
@@ -145,11 +144,11 @@ impl Filesystem for Sshfs {
         };
         match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
             Ok(attr) => {
-                //debug!("[getattr]retrun attr: {:?}", &attr);
+                debug!("[getattr Ok] inode:{:?}, kind:{:?}", attr.ino, attr.kind);
                 reply.attr(&Duration::from_secs(1), &attr);
             }
             Err(e) => {
-                warn!("[getattr] getattr_from_ssh2エラー: {:?}", e);
+                warn!("[getattr err] {}", e);
                 reply.error(e.into())
             }
         };
@@ -182,7 +181,9 @@ impl Filesystem for Sshfs {
                 }; // "." ".."の解決用。 attr ディレクトリであることのみを示す。
                 dir.insert(0, (Path::new("..").into(), cur_file_attr.clone()));
                 dir.insert(0, (Path::new(".").into(), cur_file_attr));
+                let item_count = dir.len();
                 let fh = FileHandle(self.dhandls.add_dir(dir));
+                debug!("[opendir ok] fh:{}, count:{}", fh, item_count);
                 reply.opened(fh, FopenFlags::empty());
             }
             Err(e) => {
@@ -207,7 +208,8 @@ impl Filesystem for Sshfs {
             return;
         };
         for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
-            let ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
+            let entry_ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
+                // このINodeの付け方だめ。バグ認定。治すこと。
                 INodeNo(1)
             } else {
                 self.inodes.add(&f.0)
@@ -222,16 +224,17 @@ impl Filesystem for Sshfs {
                 Err(e) => {
                     warn!(
                         "[readdir]ファイルタイプ解析失敗: inode={}, name={:?}",
-                        ino, name
+                        entry_ino, name
                     );
                     reply.error(e.into());
                     return;
                 }
             };
-            if reply.add(ino, i, filetype, name) {
+            if reply.add(entry_ino, i, filetype, name) {
                 break;
             }
         }
+        debug!("[readdir] Ok: ino={}, offset={}", ino, offset);
         reply.ok();
     }
 
@@ -258,12 +261,13 @@ impl Filesystem for Sshfs {
         };
         match self.sftp.readlink(&path) {
             Ok(p) => {
-                //debug!("[readlink] ret_path => {:?}", &p);
+                debug!("[readlink] ok: ret_path => {:?}", p);
                 reply.data(p.as_os_str().to_string_lossy().as_bytes());
             }
             Err(e) => {
-                //debug!("[readlink] ssh2::readlink error => {e:?}");
-                reply.error(Error::from(e).into());
+                let e = Error::from(e);
+                warn!("[readlink] ssh2::readlink error => {e}");
+                reply.error(e.into());
             }
         }
     }
@@ -312,13 +316,12 @@ impl Filesystem for Sshfs {
                 reply.opened(fh, FopenFlags::empty());
             }
             Err(e) => {
-                log::error!(
+                let e = Error::from(e);
+                warn!(
                     "file-open error: filename='{:?}', mode={:?}, err={}",
-                    file_name,
-                    flags_ssh2,
-                    e
+                    file_name, flags_ssh2, e
                 );
-                reply.error(Error::from(e).into());
+                reply.error(e.into());
             }
         }
     }
@@ -351,13 +354,17 @@ impl Filesystem for Sshfs {
     ) {
         debug!("[read] start: fh={}, offset={}, size={}", fh, offset, size);
         let Some(file_mutex) = self.fhandls.get_file(fh.0) else {
-            reply.error(Errno::EBADF);
+            let err = Error(Errno::EBADF);
+            warn!("[read] file handle not found. err={}", err);
+            reply.error(err.into());
             return;
         };
         let mut file = file_mutex.lock_or_panic("read", "file handle");
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)) {
-            reply.error(Error::from(e).into());
+            let err = Error::from(e);
+            warn!("[read] file seek error. err={}", err);
+            reply.error(err.into());
             return;
         }
         let mut buff = vec![0; size as usize];
@@ -378,6 +385,7 @@ impl Filesystem for Sshfs {
         }
         buff.resize(read_size, 0u8);
         reply.data(&buff);
+        debug!("[read] Ok: read_size={}", read_size);
     }
 
     fn write(
@@ -399,13 +407,17 @@ impl Filesystem for Sshfs {
             data.len()
         );
         let Some(file_mutex) = self.fhandls.get_file(fh.0) else {
-            reply.error(Errno::EBADF);
+            let err = Error(Errno::EBADF);
+            warn!("[write] file handle not found. err={}", err);
+            reply.error(err.into());
             return;
         };
         let file = &mut file_mutex.lock_or_panic("write", "file handle");
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(offset)) {
-            reply.error(Error::from(e).into());
+            let err = Error::from(e);
+            warn!("[write] file seek error. err={}", err);
+            reply.error(err.into());
             return;
         }
         let mut buf = data;
@@ -413,13 +425,16 @@ impl Filesystem for Sshfs {
             let cnt = match file.write(buf) {
                 Ok(cnt) => cnt,
                 Err(e) => {
-                    reply.error(Error::from(e).into());
+                    let err = Error::from(e);
+                    warn!("[write] file write error. err={}", err);
+                    reply.error(err.into());
                     return;
                 }
             };
             buf = &buf[cnt..];
         }
         reply.written(data.len() as u32);
+        debug!("[write] Ok: written_size={}", data.len());
     }
 
     fn lseek(
@@ -440,30 +455,39 @@ impl Filesystem for Sshfs {
                 if offset >= 0 {
                     SeekFrom::Start(offset as u64)
                 } else {
-                    reply.error(Errno::EINVAL);
+                    let err = Error(Errno::EINVAL);
+                    warn!("[lseek] invalid offset for SEEK_SET: offset={}", offset);
+                    reply.error(err.into());
                     return;
                 }
             }
             libc::SEEK_CUR => SeekFrom::Current(offset),
             libc::SEEK_END => SeekFrom::End(offset),
             _ => {
-                reply.error(Errno::EINVAL);
+                let err = Error(Errno::EINVAL);
+                warn!("[lseek] invalid whence value: whence={}", whence);
+                reply.error(err.into());
                 return;
             }
         };
         let Some(file_mutex) = self.fhandls.get_file(fh.0) else {
-            reply.error(Errno::EBADF);
+            let err = Error(Errno::EBADF);
+            warn!("[lseek] file handle not found. err={}", err);
+            reply.error(err.into());
             return;
         };
         let file = &mut file_mutex.lock_or_panic("lseek", "file handle");
         let pos = match file.seek(seek_from) {
             Ok(p) => p,
             Err(e) => {
-                reply.error(Error::from(e).into());
+                let err = Error::from(e);
+                warn!("[lseek] file seek error. err={}", err);
+                reply.error(err.into());
                 return;
             }
         };
         reply.offset(pos as i64);
+        debug!("[lseek] Ok: new_offset={}", pos);
     }
 
     fn mknod(
@@ -481,12 +505,19 @@ impl Filesystem for Sshfs {
             parent, name, mode, umask
         );
         if mode & libc::S_IFMT != libc::S_IFREG {
-            reply.error(Errno::EPERM);
+            let err = Error(Errno::EPERM);
+            warn!("[mknod] only regular files are supported. mode={:o}", mode);
+            reply.error(err.into());
             return;
         }
         let mode = mode & (!umask | libc::S_IFMT);
         let Some(mut new_name) = self.inodes.get_path(parent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[mknod] parent directory not found. parent inode={}",
+                parent
+            );
+            reply.error(err.into());
             return;
         };
         new_name.push(name);
@@ -496,23 +527,41 @@ impl Filesystem for Sshfs {
             mode as i32,
             OpenType::File,
         ) {
-            reply.error(Error::from(e).into());
+            let err = Error::from(e);
+            warn!(
+                "[mknod] failed to create file. path={:?}, mode={:o}, err={}",
+                new_name, mode, err
+            );
+            reply.error(err.into());
             return;
         }
         let new_attr = match self.getattr_from_ssh2(&new_name, req.uid(), req.gid()) {
             Ok(a) => a,
             Err(e) => {
+                warn!(
+                    "[mknod] failed to get attributes for new file. path={:?}, err={}",
+                    new_name, e
+                );
                 reply.error(e.into());
                 return;
             }
         };
         reply.entry(&Duration::from_secs(1), &new_attr, Generation(0));
+        debug!(
+            "[mknod] Ok: created file {:?} with inode {}",
+            new_name, new_attr.ino
+        );
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("[unlink] start: parent={}, name={:?}", parent, name);
         let Some(mut path) = self.inodes.get_path(parent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[unlink] parent directory not found. parent inode={}",
+                parent
+            );
+            reply.error(err.into());
             return;
         };
         path.push(name);
@@ -520,8 +569,13 @@ impl Filesystem for Sshfs {
             Ok(_) => {
                 self.inodes.del_inode_with_path(&path);
                 reply.ok();
+                debug!("[unlink] Ok: removed file {:?}", path);
             }
-            Err(e) => reply.error(Error::from(e).into()),
+            Err(e) => {
+                let err = Error::from(e);
+                warn!("[unlink] failed to remove file {:?}. err={}", path, err);
+                reply.error(err.into());
+            }
         }
     }
 
@@ -539,7 +593,12 @@ impl Filesystem for Sshfs {
             parent, name, mode, umask
         );
         let Some(mut path) = self.inodes.get_path(parent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[mkdir] parent directory not found. parent inode={}",
+                parent
+            );
+            reply.error(err.into());
             return;
         };
         path.push(name);
@@ -548,26 +607,52 @@ impl Filesystem for Sshfs {
 
         match self.sftp.mkdir(&path, mode) {
             Ok(_) => match self.getattr_from_ssh2(&path, req.uid(), req.gid()) {
-                Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
-                Err(e) => reply.error(e.into()),
+                Ok(attr) => {
+                    reply.entry(&Duration::from_secs(1), &attr, Generation(0));
+                    debug!(
+                        "[mkdir] Ok: created directory {:?} with inode {}",
+                        path, attr.ino
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "[mkdir] failed to get attributes for new directory {:?}. err={}",
+                        path, e
+                    );
+                    reply.error(e.into());
+                }
             },
-            Err(e) => reply.error(Error::from(e).into()),
+            Err(e) => {
+                let err = Error::from(e);
+                warn!("[mkdir] failed to create directory {:?}. err={}", path, err);
+                reply.error(err.into());
+            }
         }
     }
 
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: fuser::ReplyEmpty) {
         debug!("[rmdir] start: parent={}, name={:?}", parent, name);
         let Some(mut path) = self.inodes.get_path(parent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[rmdir] parent directory not found. parent inode={}",
+                parent
+            );
+            reply.error(err.into());
             return;
         };
         path.push(name);
         match self.sftp.rmdir(&path) {
             Ok(_) => {
                 self.inodes.del_inode_with_path(&path);
-                reply.ok()
+                reply.ok();
+                debug!("[rmdir] Ok: removed directory {:?}", path);
             }
-            Err(e) => reply.error(Self::rmdir_errno(e)),
+            Err(e) => {
+                let err = Error(Self::rmdir_errno(e));
+                warn!("[rmdir] failed to remove directory {:?}. err={}", path, err);
+                reply.error(err.into());
+            }
         }
     }
 
@@ -584,16 +669,40 @@ impl Filesystem for Sshfs {
             parent, name, link
         );
         let Some(mut target) = self.inodes.get_path(parent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[symlink] parent directory not found. parent inode={}",
+                parent
+            );
+            reply.error(err.into());
             return;
         };
         target.push(name);
         match self.sftp.symlink(link, &target) {
             Ok(_) => match self.getattr_from_ssh2(&target, req.uid(), req.gid()) {
-                Ok(attr) => reply.entry(&Duration::from_secs(1), &attr, Generation(0)),
-                Err(e) => reply.error(e.into()),
+                Ok(attr) => {
+                    reply.entry(&Duration::from_secs(1), &attr, Generation(0));
+                    debug!(
+                        "[symlink] Ok: created symlink {:?} -> {:?} with inode {}",
+                        target, link, attr.ino
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "[symlink] failed to get attributes for new symlink {:?}. err={}",
+                        target, e
+                    );
+                    reply.error(e.into());
+                }
             },
-            Err(e) => reply.error(Error::from(e).into()),
+            Err(e) => {
+                let err = Error::from(e);
+                warn!(
+                    "[symlink] failed to create symlink {:?} -> {:?}. err={}",
+                    target, link, err
+                );
+                reply.error(err.into());
+            }
         }
     }
 
@@ -638,18 +747,36 @@ impl Filesystem for Sshfs {
             }),
         };
         let Some(filename) = self.inodes.get_path(ino) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!("[setattr] file not found. ino={}", ino);
+            reply.error(err.into());
             return;
         };
         match self.sftp.setstat(&filename, stat) {
             Ok(_) => {
                 let stat = self.getattr_from_ssh2(&filename, req.uid(), req.gid());
                 match stat {
-                    Ok(s) => reply.attr(&Duration::from_secs(1), &s),
-                    Err(e) => reply.error(e.0),
+                    Ok(s) => {
+                        reply.attr(&Duration::from_secs(1), &s);
+                        debug!("[setattr] Ok: updated attributes for {:?}", filename);
+                    }
+                    Err(e) => {
+                        warn!(
+                            "[setattr] failed to get updated attributes for {:?}. err={}",
+                            filename, e
+                        );
+                        reply.error(e.into());
+                    }
                 }
             }
-            Err(e) => reply.error(Error::from(e).into()),
+            Err(e) => {
+                let err = Error::from(e);
+                warn!(
+                    "[setattr] failed to set attributes for {:?}. err={}",
+                    filename, err
+                );
+                reply.error(err.into());
+            }
         }
     }
 
@@ -668,13 +795,23 @@ impl Filesystem for Sshfs {
             parent, name, newparent, newname, flags
         );
         let Some(mut old_path) = self.inodes.get_path(parent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[rename] old parent directory not found. parent inode={}",
+                parent
+            );
+            reply.error(err.into());
             return;
         };
         old_path.push(name);
 
         let Some(mut new_path) = self.inodes.get_path(newparent) else {
-            reply.error(Errno::ENOENT);
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[rename] new parent directory not found. newparent inode={}",
+                newparent
+            );
+            reply.error(err.into());
             return;
         };
         new_path.push(newname);
@@ -682,7 +819,9 @@ impl Filesystem for Sshfs {
         // (修正)RENAME_EXCHANGE(入れ替え)はSFTPでは実現できない。
         // 従来はATOMICフラグに誤って対応させていた。
         if flags.contains(RenameFlags::RENAME_EXCHANGE) {
-            reply.error(Errno::EINVAL);
+            let err = Error(Errno::ENOTSUP);
+            warn!("[rename] RENAME_EXCHANGE is not supported. flags={}", flags);
+            reply.error(err.into());
             return;
         }
 
@@ -692,37 +831,71 @@ impl Filesystem for Sshfs {
         // RENAME_NOREPLACE指定時は、移動先が存在すればEEXISTを返す。
         if let Ok(new_stat) = self.sftp.lstat(&new_path) {
             if flags.contains(RenameFlags::RENAME_NOREPLACE) {
-                reply.error(Errno::EEXIST);
+                let err = Error(Errno::EEXIST);
+                warn!(
+                    "[rename] target already exists and RENAME_NOREPLACE is set. new_path={:?}",
+                    new_path
+                );
+                reply.error(err.into());
                 return;
             }
             if old_path == new_path {
                 reply.ok();
+                debug!(
+                    "[rename] ok: old_path and new_path are the same. No action needed. path={:?}",
+                    old_path
+                );
                 return;
             }
             let old_stat = match self.sftp.lstat(&old_path) {
                 Ok(s) => s,
                 Err(e) => {
-                    reply.error(Error::from(e).into());
+                    let err = Error::from(e);
+                    warn!(
+                        "[rename] failed to get attributes for old path {:?}. err={}",
+                        old_path, err
+                    );
+                    reply.error(err.into());
                     return;
                 }
             };
             // POSIXの型の組み合わせ規則
             if old_stat.is_dir() && !new_stat.is_dir() {
-                reply.error(Errno::ENOTDIR);
+                let err = Error(Errno::ENOTDIR);
+                warn!(
+                    "[rename] cannot rename a directory to a non-directory. old_path={:?}, new_path={:?}",
+                    old_path, new_path
+                );
+                reply.error(err.into());
                 return;
             }
             if !old_stat.is_dir() && new_stat.is_dir() {
-                reply.error(Errno::EISDIR);
+                let err = Error(Errno::EISDIR);
+                warn!(
+                    "[rename] cannot rename a non-directory to a directory. old_path={:?}, new_path={:?}",
+                    old_path, new_path
+                );
+                reply.error(err.into());
                 return;
             }
             if new_stat.is_dir() {
                 // 空でなければENOTEMPTYで失敗する(POSIXと同じ)。
                 if let Err(e) = self.sftp.rmdir(&new_path) {
-                    reply.error(Self::rmdir_errno(e));
+                    let err = Error(Self::rmdir_errno(e));
+                    warn!(
+                        "[rename] failed to remove existing directory {:?} before rename. err={}",
+                        new_path, err
+                    );
+                    reply.error(err.into());
                     return;
                 }
             } else if let Err(e) = self.sftp.unlink(&new_path) {
-                reply.error(Error::from(e).into());
+                let err = Error::from(e);
+                warn!(
+                    "[rename] failed to remove existing file {:?} before rename. err={}",
+                    new_path, err
+                );
+                reply.error(err.into());
                 return;
             }
             self.inodes.del_inode_with_path(&new_path);
@@ -735,8 +908,16 @@ impl Filesystem for Sshfs {
             Ok(_) => {
                 self.inodes.rename(&old_path, &new_path);
                 reply.ok();
+                debug!("[rename] Ok: renamed {:?} to {:?}", old_path, new_path);
             }
-            Err(e) => reply.error(Error::from(e).into()),
+            Err(e) => {
+                let err = Error::from(e);
+                warn!(
+                    "[rename] failed to rename {:?} to {:?}. err={}",
+                    old_path, new_path, err
+                );
+                reply.error(err.into());
+            }
         }
     }
 }
