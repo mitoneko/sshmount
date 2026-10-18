@@ -28,8 +28,8 @@ pub struct Sshfs {
     sftp: Sftp,
     inodes: Inodes,
     fhandls: Fhandles,
-    dhandls: Dhandles,  // opendir時点のディレクトリ一覧を保持する。
-    _top_path: PathBuf, // 大変。".."の解決で使わなきゃ。
+    dhandls: Dhandles, // opendir時点のディレクトリ一覧を保持する。
+    top_path: PathBuf,
 }
 
 impl Sshfs {
@@ -53,7 +53,7 @@ impl Sshfs {
             inodes,
             fhandls: Fhandles::new(),
             dhandls: Dhandles::new(),
-            _top_path: top_path,
+            top_path: top_path,
         })
     }
 
@@ -208,9 +208,29 @@ impl Filesystem for Sshfs {
             return;
         };
         for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
-            let entry_ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
-                // このINodeの付け方だめ。バグ認定。治すこと。
-                INodeNo(1)
+            let entry_ino = if f.0 == Path::new(".") {
+                ino
+            } else if f.0 == Path::new("..") {
+                let Some(cur_path) = self.inodes.get_path(ino) else {
+                    warn!("[readdir] 現ディレクトリの検索に失敗 inode={}", ino);
+                    reply.error(Errno::ENOENT);
+                    return;
+                };
+                if cur_path != self.top_path {
+                    let mut parrent_path = cur_path;
+                    parrent_path.pop();
+                    let Some(parrent_ino) = self.inodes.get_inode(&parrent_path) else {
+                        warn!(
+                            "[readdir] 親ディレクトリの検索に失敗 path={:?}",
+                            parrent_path
+                        );
+                        reply.error(Errno::ENOENT);
+                        return;
+                    };
+                    parrent_ino
+                } else {
+                    INodeNo(1) // ルートディレクトリの親は自分自身にする。
+                }
             } else {
                 self.inodes.add(&f.0)
             };
