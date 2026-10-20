@@ -11,7 +11,7 @@ dependencies = ["clippy"]
 
 [tasks.pre-sshmount-test]
 command = "cargo"
-args = ["run", "--", "-d", "--debug", "${SSH_TEST_REMOTE}", "${SSH_TEST_MOUNT}"]
+args = ["run", "--release", "--", "-d", "--debug", "${SSH_TEST_REMOTE}", "${SSH_TEST_MOUNT}"]
 dependencies = ["build"]
 
 [tasks.exec-sshmount-test]
