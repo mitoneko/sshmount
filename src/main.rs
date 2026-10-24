@@ -10,6 +10,10 @@ use daemonize::Daemonize;
 use fuse_util::{make_full_path, make_mount_option, make_remote_path};
 use log::{error, info};
 use ssh_connect::make_ssh_session;
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 fn main() -> Result<()> {
     //env_logger::init();

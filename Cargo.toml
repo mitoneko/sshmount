@@ -27,6 +27,7 @@ dns-lookup = "4.0.1"
 #env_logger = "0.11.11"
 log = "0.4.34"
 systemd-journal-logger = "2.2.2"
+tikv-jemallocator = "0.7"
 fluent-uri = { version = "0.4.1", features = ["net"] }
 home = "0.5.12"
 users = "0.11.0"

@@ -28,8 +28,8 @@ pub struct Sshfs {
     sftp: Sftp,
     inodes: Inodes,
     fhandls: Fhandles,
-    dhandls: Dhandles,  // opendir時点のディレクトリ一覧を保持する。
-    _top_path: PathBuf, // 大変。".."の解決で使わなきゃ。
+    dhandls: Dhandles, // opendir時点のディレクトリ一覧を保持する。
+    top_path: PathBuf,
 }
 
 impl Sshfs {
@@ -53,7 +53,7 @@ impl Sshfs {
             inodes,
             fhandls: Fhandles::new(),
             dhandls: Dhandles::new(),
-            _top_path: top_path,
+            top_path,
         })
     }
 
@@ -92,6 +92,34 @@ impl Sshfs {
             ssh2::FileType::Symlink => Ok(fuser::FileType::Symlink),
             ssh2::FileType::Socket => Ok(fuser::FileType::Socket),
             ssh2::FileType::Other(_) => Err(Error(Errno::EBADF)),
+        }
+    }
+
+    /// 現在のディレクトリのInodeから、親ディレクトリのInodeを取得する。
+    /// マウントポイントより上位のディレクトリは、POSIXの規定に沿い、1を返す。
+    fn get_parent_inode(&self, ino: INodeNo) -> Result<INodeNo, Error> {
+        let Some(cur_path) = self.inodes.get_path(ino) else {
+            let err = Error(Errno::ENOENT);
+            warn!(
+                "[get_parent_inode] 現ディレクトリの検索に失敗 inode={}",
+                ino
+            );
+            return Err(err);
+        };
+        if cur_path != self.top_path {
+            let mut parrent_path = cur_path;
+            parrent_path.pop();
+            let Some(parrent_ino) = self.inodes.get_inode(&parrent_path) else {
+                let err = Error(Errno::ENOENT);
+                warn!(
+                    "[get_parent_inode] 親ディレクトリの検索に失敗 path={:?}",
+                    parrent_path
+                );
+                return Err(err);
+            };
+            Ok(parrent_ino)
+        } else {
+            Ok(INodeNo(1)) // ルートディレクトリの親は自分自身にする。
         }
     }
 
@@ -204,33 +232,38 @@ impl Filesystem for Sshfs {
         debug!("[readdir] start: ino={}, offset={}", ino, offset);
         // (修正)opendirで保持したスナップショットを使う。
         let Some(dir) = self.dhandls.get_dir(fh.0) else {
-            reply.error(Errno::EBADF);
+            let err = Error(Errno::EBADF);
+            warn!("[readdir] file handle not found. err={}", err);
+            reply.error(err.into());
             return;
         };
-        for (i, f) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
-            let entry_ino = if f.0 == Path::new("..") || f.0 == Path::new(".") {
-                // このINodeの付け方だめ。バグ認定。治すこと。
-                INodeNo(1)
-            } else {
-                self.inodes.add(&f.0)
+
+        for (next_offset, (path, stat)) in (offset + 1..).zip(dir.iter().skip(offset as usize)) {
+            let entry_ino = match path {
+                path if path == Path::new(".") => ino,
+                path if path == Path::new("..") => match self.get_parent_inode(ino) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!(
+                            "[readdir] 親ディレクトリの検索に失敗: inode={}, name={:?}",
+                            ino, path
+                        );
+                        reply.error(e.into());
+                        return;
+                    }
+                },
+                path => self.inodes.add(path),
             };
-            let name = match f.0.file_name() {
-                Some(n) => n,
-                None => f.0.as_os_str(),
+            let name = path.file_name().unwrap_or(path.as_os_str());
+            let Ok(filetype) = Self::conv_file_kind_ssh2fuser(&stat.file_type()) else {
+                warn!(
+                    "[readdir]ファイルタイプ解析失敗: inode={}, name={:?}",
+                    entry_ino, name
+                );
+                reply.error(Error(Errno::EBADF).into());
+                return;
             };
-            let filetype = &f.1.file_type();
-            let filetype = match Self::conv_file_kind_ssh2fuser(filetype) {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!(
-                        "[readdir]ファイルタイプ解析失敗: inode={}, name={:?}",
-                        entry_ino, name
-                    );
-                    reply.error(e.into());
-                    return;
-                }
-            };
-            if reply.add(entry_ino, i, filetype, name) {
+            if reply.add(entry_ino, next_offset, filetype, name) {
                 break;
             }
         }
